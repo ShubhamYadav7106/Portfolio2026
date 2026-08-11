@@ -14,8 +14,12 @@
                 <p v-for="msg in content.externalLink.note" class="text-slate-500 dark:text-slate-300">{{ msg }}<br/></p>
                 <div class="flex flex-col sm:flex-row items-center justify-center space-y-4 sm:space-x-5">
                     <template v-if="content.externalLink.link.email">
-                        <a :href="'https://mail.google.com/mail/?view=cm&fs=1&to=' + encodeURIComponent(content.externalLink.link.email)" target="_blank" rel="noopener">
-                            <button class="py-2 px-6 bg-transparent border border-button-color shadow-sm shadow-button-color text-button-color hover:text-white hover:bg-button-color duration-300 focus:bg-button-color focus:text-white active:bg-button-color active:text-white">Send an Email</button>
+                        <a
+                            :href="emailHref"
+                            @click="handleEmailClick"
+                            class="py-2 px-6 bg-transparent border border-button-color shadow-sm shadow-button-color text-button-color hover:text-white hover:bg-button-color duration-300 focus:bg-button-color focus:text-white active:bg-button-color active:text-white"
+                        >
+                            Send an Email
                         </a>
                         <p class="text-sm mt-4 sm:mt-0 text-slate-500 dark:text-slate-300">{{ content.externalLink.responseTimeMessage }}</p>
                     </template>
@@ -40,5 +44,17 @@ const props = defineProps({
 
 const contactSection = ref({})
 const visible = props.transitions.active && window.matchMedia('(prefers-reduced-motion: no-preference)').matches ? onIntersect(contactSection, !!props.transitions.showOnce, { threshold: props.transitions.thresholdOption }) : true
+
+const emailAddress = props.content.externalLink.link.email
+const emailHref = `mailto:${emailAddress}`
+
+const handleEmailClick = (event) => {
+    const isTouchDevice = window.matchMedia('(pointer: coarse)').matches || window.matchMedia('(hover: none)').matches
+
+    if (!isTouchDevice) {
+        event.preventDefault()
+        window.open(`https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(emailAddress)}`, '_blank', 'noopener,noreferrer')
+    }
+}
 
 </script>
