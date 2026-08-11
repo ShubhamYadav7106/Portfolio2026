@@ -9,7 +9,7 @@
                             <img
                                 @load="handleImageLoad"
                                 :src="getImageUrl(img)"
-                                class="w-full object-cover h-40 md:h-48 lg:h-[205px]"
+                                class="block w-full h-auto object-contain"
                                 loading="lazy"
                             />
                         </div>
@@ -23,7 +23,7 @@
                         <img
                             @load="handleImageLoad"
                             :src="getImageUrl(project.imageLink)"
-                            class="w-full object-cover h-40 md:h-48 lg:h-[205px]"
+                            class="block w-full h-auto object-contain"
                             loading="lazy"
                         />
                     </div>
@@ -61,7 +61,7 @@
                             <img
                                 @load="handleImageLoad"
                                 :src="getImageUrl(img)"
-                                class="w-full object-cover h-40 md:h-48 lg:h-[205px]"
+                                class="block w-full h-auto object-contain"
                                 loading="lazy"
                             />
                         </div>
@@ -75,7 +75,7 @@
                         <img
                             @load="handleImageLoad"
                             :src="getImageUrl(project.imageLink)"
-                            class="w-full object-cover h-40 md:h-48 lg:h-[205px]"
+                            class="block w-full h-auto object-contain"
                             loading="lazy"
                         />
                     </div>

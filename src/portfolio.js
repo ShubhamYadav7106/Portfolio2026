@@ -22,7 +22,7 @@ const greeting = {
     name: "Shubham Yadav",
     message: "Enthusiastic and skilled Frontend Developer seeking to apply and further enhance my development expertise. Eager to collaborate with a dynamic team, contribute to innovative projects, and create user-friendly visually appealing websites and web applications.",
     basedLocation: "India",
-    resumeLink: "https://drive.google.com/file/d/1ilsx_aNmmNLDvoHCH2ycyDWQskKfTej1/view?usp=sharing", // recommended: google drive file share link (change to "anyone on the internet can view")
+    resumeLink: "https://drive.google.com/file/d/1Fa3crXAKGrsCJiQKoEA4TxZt3wjhlhx1/view?usp=sharing", // recommended: google drive file share link (change to "anyone on the internet can view")
     logo: {
         link: "images/initials.png", // use relative path from  parent directory -> ex: images/image.ext
         custom: true // takes precedence over image logo and allows for custom HTML logo (./components/Navbar.vue)
@@ -50,8 +50,8 @@ const about = {
         "Node.js",
         "Tailwind",
         "Git",
-        " GitHub",
-        " Codex"
+        "GitHub",
+        "Codex"
     ],
     photo1Link: "images/portrait1.jpeg",
     photo2Link: "images/portrait2.jpeg",
