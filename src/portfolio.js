@@ -22,7 +22,7 @@ const greeting = {
     name: "Shubham Yadav",
     message: "Enthusiastic and skilled Frontend Developer seeking to apply and further enhance my development expertise. Eager to collaborate with a dynamic team, contribute to innovative projects, and create user-friendly visually appealing websites and web applications.",
     basedLocation: "India",
-    resumeLink: "https://drive.google.com/file/d/1Fa3crXAKGrsCJiQKoEA4TxZt3wjhlhx1/view?usp=sharing", // recommended: google drive file share link (change to "anyone on the internet can view")
+    resumeLink: "https://drive.google.com/file/d/1IsQc9IV6zUjcnFX75AMDPITt3419KbqQ/view?usp=sharing", // recommended: google drive file share link (change to "anyone on the internet can view")
     logo: {
         link: "images/initials.png", // use relative path from  parent directory -> ex: images/image.ext
         custom: true // takes precedence over image logo and allows for custom HTML logo (./components/Navbar.vue)
@@ -67,7 +67,7 @@ const experiences = [
       name: "Indux Technology",
       link: "https://induxtechnology.com/"
     },
-    duration: "Jan 2026 - Present",
+    duration: "Jan 2026 - Apr 2026",
     content: [
       {
         sectionHeader: "",
@@ -162,7 +162,10 @@ const works = [
         //         url: ""
         //     }
         // ],
-        imageLink: "images/eduvaultai_dash_pic.png",
+        imageLinks: [
+          "images/eduvaultai_dash_pic.png",
+         "images/tenImg.png"
+        ],
         alignLeft: true
     },
     {
