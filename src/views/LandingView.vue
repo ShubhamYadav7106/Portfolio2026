@@ -1,7 +1,7 @@
 <template>
     <section class="min-h-[60vh] w-full flex justify-center mb-6 md:mb-10 lg:mb-20" id="landing-page">
         <div class="flex items-center space-x-0 space-y-7 md:space-y-0 md:space-x-7 flex-col md:flex-row m-auto">
-           <img :class="['w-64 h-64 md:w-72 md:h-72 lg:w-96 lg:h-96 object-cover rounded-tl-[100px] rounded-tr-[30px] rounded-br-[100px] rounded-bl-[30px] shadow-md transition-all duration-700 ease-out  hover:-translate-y-1 hover:shadow-[0_25px_60px_rgba(59,130,246,0.35)] motion-reduce:transition-none', showTransition ? ' opacity-100' : '-translate-y-4 opacity-0']" :src="getImageUrl(content.portraitLink)" />
+           <img :class="['w-64 h-64 md:w-72 md:h-72 lg:w-96 lg:h-96 object-cover rounded-tl-[100px] rounded-tr-[30px] rounded-br-[100px] rounded-bl-[30px] shadow-md transition-all duration-700 ease-out  hover:translate-y-1 hover:shadow-[0_25px_60px_rgba(59,130,246,0.55)] motion-reduce:transition-none', showTransition ? ' opacity-100' : '-translate-y-4 opacity-0']" :src="getImageUrl(content.portraitLink)" />
             <div class="flex flex-col space-y-2">
                 <p :class="['text-lg lg:text-xl transition-all motion-reduce:transition-none duration-500 delay-[500ms]', showTransition ? 'translate-y-0 opacity-1' : '-translate-y-4 opacity-0']">{{ content.intro }}</p>
                 <h1 :class="['text-2xl lg:text-4xl font-bold transition-all motion-reduce:transition-none duration-500 delay-[550ms]', showTransition ? 'translate-y-0 opacity-1' : '-translate-y-4 opacity-0']">{{ content.name }}</h1>
