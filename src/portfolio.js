@@ -20,9 +20,10 @@ const splashScreen = true // recommended: for best behavior after refresh
 const greeting = {
     intro: "Hello 👋, my name is",
     name: "Shubham Yadav",
-    message: "Enthusiastic and skilled Frontend Developer seeking to apply and further enhance my development expertise. Eager to collaborate with a dynamic team, contribute to innovative projects, and create user-friendly visually appealing websites and web applications.",
-    basedLocation: "India",
-    resumeLink: "https://drive.google.com/file/d/1IsQc9IV6zUjcnFX75AMDPITt3419KbqQ/view?usp=sharing", // recommended: google drive file share link (change to "anyone on the internet can view")
+message:
+  "Enthusiastic and skilled Full Stack Developer seeking to apply and further enhance my development expertise. Eager to collaborate with a dynamic team, contribute to innovative projects, and build user-friendly, visually appealing, and scalable web applications.",
+   basedLocation: "India",
+    resumeLink: "https://drive.google.com/file/d/19oMBXgTM11dHUQEB0pahcZbfNnvG1NXv/view?usp=sharing", // recommended: google drive file share link (change to "anyone on the internet can view")
     logo: {
         link: "images/initials.png", // use relative path from  parent directory -> ex: images/image.ext
         custom: true // takes precedence over image logo and allows for custom HTML logo (./components/Navbar.vue)
@@ -41,7 +42,7 @@ const socialMediaLinks = {
 // --- 😎 About Section ---
 const about = {
     autobiography: [
-        "My name is Shubham Yadav, a Computer Science Engineering student and aspiring Full-Stack Developer who enjoys building modern and user-friendly web applications. I have hands-on experience as a Frontend Developer, mainly working with React and TypeScript. During my internships, I worked on real-world projects like InduxCRM, building features such as dashboards, role-based systems, quotations, and invoices.Currently, I’m focused on improving my full-stack skills, especially backend development, APIs, and databases."
+        "My name is Shubham Yadav, a Computer Science Engineering student and aspiring Full-Stack Developer who enjoys building modern and user-friendly web applications. I have hands-on experience as a Frontend Developer, mainly working with React and TypeScript. During my internships, I worked on real-world projects like InduxCRM, building features such as dashboards, role-based systems, quotations, and invoices. Currently, I’m focused on improving my full-stack skills, especially backend development, APIs, and databases."
     ], // Separated items are paragraphs
     techStack: [
         "JavaScript",
@@ -62,7 +63,7 @@ const about = {
 
 const experiences = [
   {
-    position: "Frontend Developer",
+    position: "Full Stack Developer",
     company: {
       name: "Indux Technology",
       link: "https://induxtechnology.com/"
