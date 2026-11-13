@@ -49,7 +49,7 @@ const visible = props.transitions.active && window.matchMedia('(prefers-reduced-
 
 // Static Images
 let getImageUrl = (path) => {
-  return new URL(`../assets/${path}`, import.meta.url).href
+  return new URL(`../assets/images/${path.replace(/^images\//, '')}`, import.meta.url).href
 }
 
 </script>

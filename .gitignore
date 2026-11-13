@@ -30,3 +30,8 @@ coverage
 
 *.timestamp-*.mjs
 
+# Local credentials; only placeholder examples may be committed.
+.env
+.env.*
+!.env.example
+

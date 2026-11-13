@@ -1,0 +1,255 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Ask Shubham AI knowledge module",
+  "description": "Editor schema. The shared runtime validator additionally enforces explicit approval, matching approved values, date ordering, uniqueness, and eligibility.",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "id",
+    "category",
+    "title",
+    "facts",
+    "presentation"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 2
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "category": {
+      "enum": [
+        "profile",
+        "education",
+        "skills",
+        "experience",
+        "project",
+        "achievements",
+        "career",
+        "availability",
+        "links"
+      ]
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "facts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/fact"
+      }
+    },
+    "presentation": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "legacyEntryId",
+          "source",
+          "value"
+        ],
+        "properties": {
+          "legacyEntryId": {
+            "type": "string"
+          },
+          "source": {
+            "type": "object"
+          },
+          "value": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "fact": {
+      "type": "object",
+      "required": [
+        "id",
+        "title",
+        "value",
+        "status",
+        "visibility",
+        "legacyEntryId",
+        "sources",
+        "verification",
+        "freshness"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "value": {
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "status": {
+          "enum": [
+            "pending_review",
+            "verified",
+            "outdated",
+            "archived"
+          ]
+        },
+        "visibility": {
+          "enum": [
+            "public",
+            "private"
+          ]
+        },
+        "legacyEntryId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              {
+                "type": "object",
+                "required": [
+                  "type",
+                  "file",
+                  "field",
+                  "section"
+                ],
+                "properties": {
+                  "type": {
+                    "const": "portfolio"
+                  },
+                  "file": {
+                    "const": "src/portfolio.js"
+                  },
+                  "field": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "section": {
+                    "type": "string",
+                    "pattern": "^#[a-z][a-z0-9-]*$"
+                  }
+                },
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "required": [
+                  "type",
+                  "reference"
+                ],
+                "properties": {
+                  "type": {
+                    "const": "owner"
+                  },
+                  "reference": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "additionalProperties": false
+              }
+            ]
+          }
+        },
+        "verification": {
+          "type": "object",
+          "required": [
+            "approvedBy",
+            "approvedAt",
+            "approvalReference",
+            "approvedValue"
+          ],
+          "properties": {
+            "approvedBy": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "approvedAt": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "approvalReference": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "approvedValue": {
+              "type": [
+                "string",
+                "number",
+                "boolean",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        "freshness": {
+          "type": "object",
+          "required": [
+            "asOf",
+            "reviewAfter"
+          ],
+          "properties": {
+            "asOf": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "reviewAfter": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

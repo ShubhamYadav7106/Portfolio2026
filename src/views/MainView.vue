@@ -57,10 +57,11 @@
 			</div>
 		</div>
 	</div>
+	<AskShubhamWidget v-if="!showingSplash" />
 </template>
 
 <script setup>
-import { onMounted, ref } from 'vue'
+import { defineAsyncComponent, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
 import Navbar from '../components/Navbar.vue'
@@ -72,6 +73,8 @@ import ContactView from './ContactView.vue'
 import SplashView from './SplashView.vue'
 
 import portfolio from '../portfolio'
+
+const AskShubhamWidget = defineAsyncComponent(() => import('../components/assistant/AskShubhamWidget.vue'))
 
 const router = useRouter()
 

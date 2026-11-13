@@ -22,6 +22,6 @@ const props = defineProps({
 const showIntro = ref(false)
 
 let getImageUrl = (path) => {
-  return new URL(`../assets/${path}`, import.meta.url).href
+  return new URL(`../assets/images/${path.replace(/^images\//, '')}`, import.meta.url).href
 }
 </script>
