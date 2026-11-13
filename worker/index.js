@@ -14,7 +14,7 @@ import links from '../knowledge/links.json'
 import experienceSummary from '../knowledge/experience/summary.json'
 import eventverse from '../knowledge/projects/eventverse.json'
 import violet from '../knowledge/projects/violet.json'
-import { validateKnowledge } from '../knowledge/validation.js'
+import { validateKnowledge, todayUTC } from '../knowledge/validation.js'
 import { createRecruiterService } from '../server/recruiter.js'
 import { buildMessages } from '../server/policy.js'
 import { validateChatInput } from '../server/validation.js'
@@ -22,7 +22,6 @@ import { ConversationStream, completionBudget } from '../server/responseStream.j
 import { PublicError, safeError } from '../server/errors.js'
 
 const modules = [profile, education, skills, indux, entrepreneurship, crm, neuroTen, ecommerce, achievements, careerGoals, availability, links, experienceSummary, eventverse, violet]
-const knowledge = validateKnowledge(index, modules)
 const encoder = new TextEncoder()
 const decoder = new TextDecoder()
 const clients = new Map()
@@ -113,8 +112,13 @@ async function* parseSse(body, signal) {
 }
 
 function loadKnowledge() {
-  if (!knowledgeCache) knowledgeCache = { errors: knowledge.errors, facts: knowledge.facts }
-  return structuredClone(knowledgeCache)
+  // Read the clock inside the request context, never during module startup.
+  const today = todayUTC()
+  if (!knowledgeCache || knowledgeCache.today !== today) {
+    const knowledge = validateKnowledge(index, modules, { today })
+    knowledgeCache = { today, result: { errors: knowledge.errors, facts: knowledge.facts } }
+  }
+  return structuredClone(knowledgeCache.result)
 }
 
 function workerConfig(env) {
