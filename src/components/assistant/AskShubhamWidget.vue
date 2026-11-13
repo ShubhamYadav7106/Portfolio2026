@@ -69,6 +69,7 @@ function updateViewport() {
   viewport.value = {
     '--ask-viewport-height': `${visible?.height ?? window.innerHeight}px`,
     '--ask-viewport-top': `${visible?.offsetTop ?? 0}px`,
+    '--ask-mobile-bottom-inset': visible && visible.height < window.innerHeight * .75 ? '0px' : 'env(safe-area-inset-bottom, 0px)',
   }
 }
 
@@ -318,6 +319,7 @@ onBeforeUnmount(() => {
 
       <Transition name="ask-launcher">
         <button v-show="!isOpen" ref="launcher" class="chat-launcher" aria-label="Open Ask Shubham AI" aria-haspopup="dialog" aria-controls="ask-shubham-panel" :aria-expanded="isOpen" @click="open">
+          <span class="launcher-border-light" aria-hidden="true" />
           <span class="launcher-mark"><AssistantMark /></span>
           <span class="launcher-copy"><small>A conversation about my work</small><span>Ask Shubham AI</span></span>
           <ChevronRightIcon class="launcher-arrow" aria-hidden="true" />
@@ -330,6 +332,11 @@ onBeforeUnmount(() => {
 <style scoped>
 /* UI craft guided by unslop, Damir Sokolovsky (@heydamir), CC BY 4.0.
    https://heydamir.design/unslop */
+@property --ask-launcher-angle {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
+}
 .ask-shubham {
   --ask-accent: #17685e;
   --ask-accent-light: #298176;
@@ -369,6 +376,46 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid var(--ask-acce
   text-align: left; transition: background .16s ease, border-color .16s ease;
 }
 .chat-launcher:hover { background: var(--ask-soft); border-color: var(--ask-muted); }
+.launcher-border-light { display: none; }
+@supports (mask-composite: exclude) or (-webkit-mask-composite: xor) {
+  .launcher-border-light {
+    --ask-launcher-light: #007a52;
+    --ask-launcher-trail: #00875ab3;
+    --ask-launcher-halo: #00875a70;
+    display: block;
+    position: absolute;
+    inset: -1px;
+    border-radius: inherit;
+    pointer-events: none;
+    /* Filter the wrapper after its child's rounded mask, so the outer glow
+       remains visible rather than being clipped by that mask. */
+    filter: drop-shadow(0 0 2px var(--ask-launcher-halo)) drop-shadow(0 0 5px var(--ask-launcher-halo));
+    animation: ask-launcher-brightness 3s ease-in-out infinite;
+  }
+  .launcher-border-light::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    box-sizing: border-box;
+    padding: 2px;
+    border-radius: inherit;
+    background: conic-gradient(from var(--ask-launcher-angle), transparent 0deg 185deg, var(--ask-launcher-trail) 265deg, var(--ask-launcher-light) 325deg 350deg, transparent 360deg);
+    -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+    mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    animation: ask-launcher-border 3s linear infinite;
+  }
+  :global(html.dark) .launcher-border-light {
+    --ask-launcher-light: #78ffe6;
+    --ask-launcher-trail: #22d3eeb3;
+    --ask-launcher-halo: #2ee6cf85;
+  }
+  .chat-launcher:is(:hover, :focus, :focus-within, [aria-expanded='true']) .launcher-border-light,
+  .chat-launcher:is(:hover, :focus, :focus-within, [aria-expanded='true']) .launcher-border-light::before { animation-play-state: paused; }
+}
+@keyframes ask-launcher-border { to { --ask-launcher-angle: 360deg; } }
+@keyframes ask-launcher-brightness { 0%, 100% { opacity: .8; } 50% { opacity: 1; } }
 .launcher-mark { display: grid; place-items: center; width: 40px; height: 40px; border-right: 1px solid var(--ask-border); padding-right: 12px; color: var(--ask-link); }
 .launcher-mark .assistant-mark { width: 28px; height: 28px; }
 .launcher-copy { display: flex; flex-direction: column; gap: 4px; }
@@ -461,14 +508,25 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid var(--ask-acce
 @media (max-width: 639px) {
   .ask-shubham { --ask-panel-right: 16px; }
   .chat-launcher { bottom: max(16px, calc(env(safe-area-inset-bottom) + 12px)); }
-  .chat-panel { top: calc(var(--ask-viewport-top, 0px) + 8px); right: max(8px, env(safe-area-inset-right)); left: max(8px, env(safe-area-inset-left)); bottom: auto; width: auto; height: calc(var(--ask-viewport-height, 100dvh) - 16px); border-radius: 16px; transform-origin: bottom center; }
-  .chat-header { padding: 16px; }
+  .chat-panel { --mobile-top-gap: max(8px, env(safe-area-inset-top)); --mobile-bottom-gap: max(8px, var(--ask-mobile-bottom-inset, env(safe-area-inset-bottom))); top: calc(var(--ask-viewport-top, 0px) + var(--mobile-top-gap)); right: max(8px, env(safe-area-inset-right)); left: max(8px, env(safe-area-inset-left)); bottom: auto; width: auto; max-width: none; height: max(0px, calc(var(--ask-viewport-height, 100dvh) - var(--mobile-top-gap) - var(--mobile-bottom-gap))); border-radius: 16px; transform-origin: bottom center; }
+  .chat-header { padding: 12px 14px 8px; }
   .followup-questions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .icon-button { width: 40px; height: 40px; }
   .preview-bar { padding: 12px 16px; }
-  .chat-transcript { padding: 24px 20px; }
-  .chat-welcome h3 { font-size: 28px; }
-  .chat-footer { padding: 12px 16px max(16px, env(safe-area-inset-bottom)); }
+  .chat-transcript { padding: 12px 16px; }
+  .chat-welcome { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+  .welcome-eyebrow { margin-bottom: 6px; }
+  .chat-welcome h3 { font-size: 26px; line-height: 1.12; }
+  .welcome-description { margin: 8px 0 12px; line-height: 1.45; }
+  .chat-welcome > :not(.scrollable-suggestions) { flex-shrink: 0; }
+  .scrollable-suggestions { flex: 1 1 auto; min-height: 60px; max-height: none; grid-auto-rows: minmax(60px, auto); align-content: start; }
+  .suggestion { min-height: 60px; padding-block: 8px; gap: 8px; }
+  .suggestion-copy { gap: 2px; }
+  .welcome-review { margin: 8px 0 0; line-height: 1.4; }
+  .chat-footer { margin-top: auto; padding: 8px 12px; }
+  .followup-questions { margin-bottom: 8px; }
+  .composer { padding: 6px; }
+  .composer-meta { margin-top: 6px; }
   .composer textarea { font-size: 16px; }
 }
 @media (max-width: 359px) {

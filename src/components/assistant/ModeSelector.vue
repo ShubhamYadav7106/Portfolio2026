@@ -26,7 +26,7 @@ defineEmits(['update:modelValue'])
 .mode-option svg { width: 16px; height: 16px; flex-shrink: 0; }
 .mode-option input:checked + span { color: var(--ask-link); background: var(--ask-bg); border-color: var(--ask-border); font-weight: 600; }
 .mode-option input:focus-visible + span { outline: 2px solid var(--ask-accent-light); outline-offset: 2px; }
-@media (max-width: 639px) { .mode-option > span { min-height: 40px; } }
+@media (max-width: 639px) { .mode-selector { margin-top: 8px; } .mode-option > span { min-height: 36px; } }
 @media (max-width: 359px) { .mode-option > span { font-size: 11px; gap: 4px; } }
 @media (max-height: 500px) { .mode-selector { margin-top: 8px; } .mode-option > span { min-height: 32px; } }
 @media (prefers-reduced-motion: reduce) { .mode-option > span { transition: none; } }

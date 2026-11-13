@@ -21,8 +21,8 @@ const greeting = {
     intro: "Hello 👋, my name is",
     name: "Shubham Yadav",
 message:
-  "Enthusiastic and skilled Full Stack Developer seeking to apply and further enhance my development expertise. Eager to collaborate with a dynamic team, contribute to innovative projects, and build user-friendly, visually appealing, and scalable web applications.",
-   basedLocation: "India",
+  "Full Stack Developer with a background in Computer Science Engineering and 6 months of hands-on industry experience. Experienced in frontend and backend development, building and maintaining real-world web applications with a focus on performance, security, and user experience. Passionate about solving practical problems, writing clean and maintainable code, and collaborating with teams to deliver reliable solutions.",
+  basedLocation: "India",
     resumeLink: "https://drive.google.com/file/d/1ARvhNkEP-9RbeJEtJw5ZeZV5SM4qkt03/view?usp=sharing", // recommended: google drive file share link (change to "anyone on the internet can view")
     logo: {
         link: "images/initials.png", // use relative path from  parent directory -> ex: images/image.ext
