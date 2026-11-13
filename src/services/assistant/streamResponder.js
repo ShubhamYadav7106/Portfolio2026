@@ -1,3 +1,7 @@
+const CHAT_ENDPOINT = import.meta.env?.PROD
+  ? 'https://ask-shubham-ai.shubhamyadav98372.workers.dev/api/chat'
+  : '/api/chat'
+
 const ERROR_MESSAGES = {
   NOT_CONFIGURED: 'The AI assistant isn’t configured yet. Please check back later.',
   RATE_LIMIT: 'Too many messages. Please wait a moment before retrying.',
@@ -67,7 +71,7 @@ export async function streamChat(question, { mode = 'recruiter', history = [], s
   // or token-reset this timer; a stalled request must still end.
   setDeadline(timeoutMs ?? (mode === 'recruiter' ? 17000 : 135000))
   try {
-    const response = await fetchImpl('/api/chat', {
+    const response = await fetchImpl(CHAT_ENDPOINT, {
       method: 'POST', credentials: 'omit', headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' }, signal: controller.signal,
       body: JSON.stringify({ mode, message: question, history: boundedHistory(history, mode) }),
     })
