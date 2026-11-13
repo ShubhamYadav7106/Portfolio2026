@@ -1,0 +1,18 @@
+name = "ask-shubham-ai"
+main = "worker/index.js"
+compatibility_date = "2026-11-13"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+
+[vars]
+GROQ_MODEL = "openai/gpt-oss-20b"
+GEMINI_MODEL = "gemini-3.8-flash"
+ALLOWED_ORIGINS = "https://your-portfolio.example"
+REQUEST_TIMEOUT_MS = "60000"
+RATE_LIMIT_WINDOW_MS = "60000"
+RATE_LIMIT_MAX = "20"
+MAX_CONCURRENT_REQUESTS = "4"
+MAX_COMPLETION_TOKENS = "2048"
+GROQ_RECRUITER_TPM_THRESHOLD_PERCENT = "85"
+GROQ_RECRUITER_QUOTA_MAX_AGE_MS = "15000"
+GROQ_RECRUITER_QUOTA_PROBE_MS = "60000"
