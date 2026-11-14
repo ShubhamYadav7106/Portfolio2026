@@ -2,6 +2,9 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { randomUUID } from 'node:crypto'
 
 const requests = new AsyncLocalStorage()
+export function withRequestLogContext(callback, { metadataOnly = false } = {}) {
+  return requests.run({ requestId: randomUUID(), metadataOnly }, callback)
+}
 export function requestLogContext(req, res, next) {
   requests.run({ requestId: randomUUID() }, next)
 }
@@ -24,5 +27,20 @@ export function redactLog(value) {
 export function requestLog(event, details = {}) {
   const context = requests.getStore()
   if (!context) return
+  if (context.metadataOnly) {
+    // Worker diagnostics contain operational metadata only: no prompts, fact
+    // IDs/values, generated text, provider messages, headers or credentials.
+    if (!['provider_attempt', 'provider_error', 'quota_deferred', 'metrics', 'error'].includes(event)) return
+    const safe = {}
+    const labels = ['provider', 'account', 'mode', 'origin', 'stage', 'code', 'finishReason', 'failureStage', 'routingReason', 'limitType', 'providerCode', 'providerParameter', 'providerFailure', 'errorKind']
+    const counters = ['status', 'providerStatus', 'elapsedMs', 'retryAfterSeconds', 'factCount', 'historyMessages', 'promptCharacters', 'estimatedRequestTokens', 'maxCompletionTokens', 'responseCharacters', 'providerCalls']
+    for (const key of labels) if (typeof details[key] === 'string' && /^[A-Za-z0-9_.-]{1,80}$/.test(details[key])) safe[key] = details[key]
+    for (const key of counters) if (typeof details[key] === 'number' && Number.isFinite(details[key])) safe[key] = details[key]
+    for (const group of ['usage', 'limits']) if (details[group] && typeof details[group] === 'object') {
+      safe[group] = Object.fromEntries(Object.entries(details[group]).filter(([key, value]) => /^[A-Za-z]+$/.test(key) && typeof value === 'number' && Number.isFinite(value)))
+    }
+    try { console.info(JSON.stringify({ requestId: context.requestId, event, ...safe })) } catch { /* Diagnostics must never affect a response. */ }
+    return
+  }
   try { console.info(JSON.stringify(redactLog({ ...context, event, ...details }))) } catch { /* Diagnostics must never affect a response. */ }
 }

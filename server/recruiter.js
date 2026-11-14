@@ -148,7 +148,11 @@ export function createRecruiterService({ config, groq, fallback, knowledgeLoader
         if (!candidate.client || !candidate.key) continue
         const cooling = activeCooldown(candidate)
         const admission = cooling ? { reason: 'cooldown', retryAfterSeconds: (cooling.until - now()) / 1000 } : candidate.budget.reserve(estimate, budget)
-        if (!admission.ticket) { deferred.push(admission); continue }
+        if (!admission.ticket) {
+          requestLog('quota_deferred', { provider: 'groq', account: name, routingReason: admission.reason, retryAfterSeconds: admission.retryAfterSeconds })
+          deferred.push(admission)
+          continue
+        }
         selectedProvider = name
         account = candidate
         route = admission

@@ -4,6 +4,7 @@ import { buildMessages } from '../server/policy.js'
 import { validateChatInput } from '../server/validation.js'
 import { ConversationStream, completionBudget } from '../server/responseStream.js'
 import { PublicError, safeError } from '../server/errors.js'
+import { withRequestLogContext, requestLog } from '../server/requestLogging.js'
 
 const encoder = new TextEncoder()
 const decoder = new TextDecoder()
@@ -41,10 +42,11 @@ async function parseProviderError(response) {
   const text = await response.text()
   let body
   try { body = JSON.parse(text) } catch { body = { message: 'Provider request failed.' } }
-  const error = new Error('Provider request failed')
+  const detail = body?.error || body || {}
+  const error = new Error(typeof detail.message === 'string' ? detail.message : 'Provider request failed')
   error.status = response.status
   error.headers = response.headers
-  error.error = body
+  error.error = detail
   return error
 }
 
@@ -56,14 +58,23 @@ async function requestProvider({ key, baseUrl }, body, signal) {
     signal,
   })
   if (!response.ok) throw await parseProviderError(response)
-  return body.stream ? parseSse(response.body, signal) : response.json()
+  return { data: body.stream ? parseSse(response.body, signal) : await response.json(), response }
 }
 
 function fetchProvider({ key, baseUrl }) {
   return {
     chat: {
       completions: {
-        create: (body, { signal } = {}) => requestProvider({ key, baseUrl }, body, signal),
+        create: (body, { signal } = {}) => {
+          // Both await and withResponse share one fetch; quota headers stay
+          // available without consuming or duplicating the response stream.
+          let response
+          const execute = () => response ??= requestProvider({ key, baseUrl }, body, signal)
+          return {
+            then: (resolve, reject) => execute().then(result => result.data).then(resolve, reject),
+            withResponse: execute,
+          }
+        },
       },
     },
   }
@@ -168,7 +179,7 @@ async function chat(request, env, input, settings, origin) {
   try {
     if (input.mode === 'recruiter') {
       const fingerprint = JSON.stringify(settings)
-      if (recruiterState?.fingerprint !== fingerprint || recruiterState?.storage !== env.KNOWLEDGE) recruiterState = { fingerprint, storage: env.KNOWLEDGE, service: createRecruiterService({ config: settings, groq, fallback, knowledgeLoader: () => loadKnowledge(env.KNOWLEDGE), acquire: () => {
+      if (recruiterState?.fingerprint !== fingerprint || recruiterState?.storage !== env.KNOWLEDGE) recruiterState = { fingerprint, storage: env.KNOWLEDGE, service: createRecruiterService({ config: settings, groq, fallback, knowledgeLoader: () => loadKnowledge(env.KNOWLEDGE), onMetrics: metric => requestLog('metrics', metric), acquire: () => {
         if (activeRequests >= settings.maxConcurrent) throw new PublicError(429, 'BUSY', 'Too many active AI responses. Please retry shortly.')
         activeRequests++
         return () => { activeRequests-- }
@@ -230,7 +241,12 @@ export default {
         activeRequests++
         counted = true
       }
-      const work = await chat(request, env, input, settings, origin)
+      const work = input.mode === 'recruiter'
+        ? await withRequestLogContext(() => chat(request, env, input, settings, origin).catch(error => {
+          requestLog('error', { code: error?.code, status: error?.status })
+          throw error
+        }), { metadataOnly: true })
+        : await chat(request, env, input, settings, origin)
       return eventStream(async enqueue => work(enqueue), origin)
     } catch (error) {
       return errorResponse(error, origin)
