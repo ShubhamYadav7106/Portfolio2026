@@ -24,7 +24,7 @@ export function recruiterProviderDiagnostic(error) {
     ...(Number.isInteger(error?.status) && error.status >= 100 && error.status <= 599 ? { providerStatus: error.status } : {}),
     ...(codes.includes(code) ? { providerCode: code } : {}),
     ...(parameters.includes(body.param) ? { providerParameter: body.param } : {}),
-    ...(code === 'json_validate_failed' || /failed to (?:generate|validate).*json/i.test(message) ? { providerFailure: 'json_generation' } : /model.*(?:not found|not supported|does not exist)/i.test(message) ? { providerFailure: 'model_unavailable' } : /unsupported|not supported|not allowed/i.test(message) ? { providerFailure: 'unsupported_parameter' } : /overload|high demand|temporar.*unavail/i.test(message) ? { providerFailure: 'upstream_unavailable' } : {}),
+    ...(code === 'json_validate_failed' || /failed to (?:generate|validate).*json/i.test(message) ? { providerFailure: 'json_generation' } : /model.*(?:not found|not supported|does not exist|no longer available)/i.test(message) ? { providerFailure: 'model_unavailable' } : /unsupported|not supported|not allowed/i.test(message) ? { providerFailure: 'unsupported_parameter' } : /overload|high demand|temporar.*unavail/i.test(message) ? { providerFailure: 'upstream_unavailable' } : {}),
   }
 }
 

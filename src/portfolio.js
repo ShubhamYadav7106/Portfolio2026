@@ -23,7 +23,7 @@ const greeting = {
 message:
   "Full Stack Developer with a background in Computer Science Engineering and 6 months of hands-on industry experience. Experienced in frontend and backend development, building and maintaining real-world web applications with a focus on performance, security, and user experience. Passionate about solving practical problems, writing clean and maintainable code, and collaborating with teams to deliver reliable solutions.",
   basedLocation: "India",
-    resumeLink: "https://drive.google.com/file/d/1ARvhNkEP-9RbeJEtJw5ZeZV5SM4qkt03/view?usp=sharing", // recommended: google drive file share link (change to "anyone on the internet can view")
+    resumeLink: "https://drive.google.com/file/d/1CrqhVnvWa8Jp8soEbye5KS_yYXBpqMpF/view?usp=sharing", // recommended: google drive file share link (change to "anyone on the internet can view")
     logo: {
         link: "images/initials.png", // use relative path from  parent directory -> ex: images/image.ext
         custom: true // takes precedence over image logo and allows for custom HTML logo (./components/Navbar.vue)

@@ -1,3 +1,4 @@
+import { requestLogContext, requestLog } from './requestLogging.js'
 import express from 'express'
 import cors from 'cors'
 import { rateLimit } from 'express-rate-limit'
@@ -7,8 +8,9 @@ import { validateChatInput } from './validation.js'
 import { buildMessages } from './policy.js'
 import { ConversationStream, completionBudget } from './responseStream.js'
 import { createRecruiterService } from './recruiter.js'
+import { providerRequest } from './providerRequest.js'
 
-export function createApp({ config, groqRecruiter, groqGeneral, geminiRecruiter, knowledgeLoader, onProviderError = () => {}, onRecruiterMetrics = () => {} }) {
+export function createApp({ config, groqRecruiter, groqGeneral, groqFallback, knowledgeLoader, onProviderError = () => {}, onRecruiterMetrics = () => {} }) {
   const app = express()
   app.disable('x-powered-by')
   app.set('trust proxy', false)
@@ -20,11 +22,12 @@ export function createApp({ config, groqRecruiter, groqGeneral, geminiRecruiter,
   })
   app.use(cors({ origin: config.origins, methods: ['GET', 'POST', 'OPTIONS'], allowedHeaders: ['Content-Type'], credentials: false, maxAge: 600 }))
   app.get('/api/health', (req, res) => res.json({ status: 'ok', provider: 'groq', configured: Boolean(config.recruiterApiKey && config.generalApiKey), model: config.model }))
+  app.use('/api/chat', requestLogContext)
   app.use('/api/chat', rateLimit({ windowMs: config.rateLimitWindowMs, limit: config.rateLimitMax, standardHeaders: 'draft-8', legacyHeaders: false, validate: { xForwardedForHeader: false }, message: { error: { code: 'RATE_LIMIT', message: 'Too many requests. Please wait before trying again.' } } }))
   app.use(express.json({ limit: '32kb', strict: true }))
   let activeRequests = 0
   let providerAvailableAt = 0
-  const recruiter = createRecruiterService({ config, groq: groqRecruiter, gemini: geminiRecruiter, knowledgeLoader, onMetrics: onRecruiterMetrics, acquire: () => {
+  const recruiter = createRecruiterService({ config, groq: groqRecruiter, fallback: groqFallback, knowledgeLoader, onMetrics: onRecruiterMetrics, acquire: () => {
     if (activeRequests >= config.maxConcurrent) throw new PublicError(429, 'BUSY', 'Too many active AI responses. Please retry shortly.')
     activeRequests++
     return () => { activeRequests-- }
@@ -36,6 +39,8 @@ export function createApp({ config, groqRecruiter, groqGeneral, geminiRecruiter,
     let timedOut = false
     let acquired = false
     let requestMode
+    let loggedFinal = ''
+    let loggedRaw = ''
     const startedAt = Date.now()
     const controller = new AbortController()
     const providerController = new AbortController()
@@ -45,6 +50,9 @@ export function createApp({ config, groqRecruiter, groqGeneral, geminiRecruiter,
     req.once('aborted', disconnect)
     res.once('close', disconnect)
     const send = async event => {
+      if (event.type === 'delta') loggedFinal += event.text
+      if (event.type === 'start') requestLog('provider', { provider: event.provider, mode: event.mode })
+      if (event.type === 'done') requestLog('final_response', { response: loggedFinal, provider: event.provider, mode: event.mode })
       controller.signal.throwIfAborted()
       if (res.destroyed || res.writableEnded) throw new DOMException('Disconnected', 'AbortError')
       if (!res.headersSent) {
@@ -57,10 +65,12 @@ export function createApp({ config, groqRecruiter, groqGeneral, geminiRecruiter,
       if (!req.is('application/json')) throw new PublicError(415, 'INVALID_CONTENT_TYPE', 'Use application/json for chat requests.')
       const input = validateChatInput(req.body)
       requestMode = input.mode
+      requestLog('question', { question: input.message, mode: input.mode })
+      if (input.mode === 'general') requestLog('intent', { intent: 'general', factIds: [] })
       if (input.mode === 'recruiter') {
-        const deadlineAt = startedAt + 15000
+        const deadlineAt = startedAt + config.timeoutMs
         timer = setTimeout(() => { timedOut = true; controller.abort() }, Math.max(1, deadlineAt - Date.now()))
-        if (req.get('accept')?.includes('application/x-ndjson')) await send({ type: 'pending', mode: input.mode, timeoutMs: 15000 })
+        if (req.get('accept')?.includes('application/x-ndjson')) await send({ type: 'pending', mode: input.mode, timeoutMs: config.timeoutMs })
         // Race all work, including knowledge I/O, against the same request
         // signal. Provider subscribers detach and cancel when the request ends.
         let rejectAbort
@@ -93,10 +103,7 @@ export function createApp({ config, groqRecruiter, groqGeneral, geminiRecruiter,
       if (req.get('accept')?.includes('application/x-ndjson')) await send({ type: 'pending', mode: input.mode, timeoutMs: config.timeoutMs })
       controller.signal.throwIfAborted()
       const messages = buildMessages(input)
-      const options = {
-        model: config.model, messages, stream: true, max_completion_tokens: completionBudget(input.mode, input.message, config.maxCompletionTokens),
-        ...(config.model.startsWith('openai/gpt-oss-') ? { include_reasoning: false, reasoning_effort: 'low' } : {}),
-      }
+      const options = providerRequest({ model: config.model, messages, maxTokens: completionBudget(input.mode, input.message, config.maxCompletionTokens) })
       const stream = await groqGeneral.chat.completions.create(options, { signal: providerController.signal })
       await send({ type: 'start', provider: 'groq', mode: input.mode, model: config.model })
       const conversation = new ConversationStream(input.message)
@@ -108,6 +115,7 @@ export function createApp({ config, groqRecruiter, groqGeneral, geminiRecruiter,
         const choice = chunk.choices?.[0]
         if (choice?.finish_reason === 'stop') normalEnd = true
         const delta = choice?.delta?.content
+        if (typeof delta === 'string') loggedRaw += delta
         if (typeof delta !== 'string' || !delta) continue
         outputLength += delta.length
         if (outputLength > 24000) throw new PublicError(502, 'RESPONSE_LIMIT', 'The AI response exceeded the local limit. Please ask a shorter question.')
@@ -121,6 +129,7 @@ export function createApp({ config, groqRecruiter, groqGeneral, geminiRecruiter,
       await send({ type: 'done', provider: 'groq', mode: input.mode, verification: 'not_applicable' })
       res.end()
     } catch (error) {
+      requestLog('error', { reason: error?.message, code: error?.code, status: error?.status, name: error?.name })
       if (res.destroyed) return
       if (controller.signal.aborted && !timedOut) return
       const problem = safeError(error, timedOut)
@@ -136,6 +145,7 @@ export function createApp({ config, groqRecruiter, groqGeneral, geminiRecruiter,
       if (res.headersSent) res.end(JSON.stringify({ type: 'error', ...payload }) + '\n')
       else res.status(problem.status).json({ error: payload })
     } finally {
+      if (requestMode === 'general' && loggedRaw) requestLog('raw_response', { provider: 'groq', response: loggedRaw })
       clearTimeout(timer)
       controller.signal.removeEventListener('abort', abortProvider)
       providerController.abort()

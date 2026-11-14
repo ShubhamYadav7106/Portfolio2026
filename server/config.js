@@ -21,12 +21,10 @@ export function readConfig(env = {}) {
   }
   const model = (env.GROQ_MODEL || 'openai/gpt-oss-20b').trim()
   if (!/^[a-zA-Z0-9][\w./-]{0,127}$/.test(model)) throw new Error('Invalid GROQ_MODEL')
-  const geminiModel = (env.GEMINI_RECRUITER_MODEL || env.GEMINI_MODEL || '').trim()
-  if (geminiModel && !/^[a-zA-Z0-9][\w.-]{0,127}$/.test(geminiModel)) throw new Error('Invalid GEMINI_RECRUITER_MODEL')
   return {
+    fallbackApiKey: (env.GROQ_FALLBACK_API_KEY || '').trim(),
     recruiterApiKey: (env.GROQ_RECRUITER_API_KEY || '').trim(),
     generalApiKey: (env.GROQ_GENERAL_API_KEY || '').trim(), model, origins,
-    geminiApiKey: (env.GEMINI_RECRUITER_API_KEY || env.GEMINI_API_KEY || '').trim(), geminiModel,
     recruiterTpmThresholdPercent: integer('GROQ_RECRUITER_TPM_THRESHOLD_PERCENT', 85, 1, 100),
     recruiterQuotaMaxAgeMs: integer('GROQ_RECRUITER_QUOTA_MAX_AGE_MS', 15000, 1000, 120000),
     recruiterQuotaProbeMs: integer('GROQ_RECRUITER_QUOTA_PROBE_MS', 60000, 1000, 3600000),

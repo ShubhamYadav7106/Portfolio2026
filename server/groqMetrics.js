@@ -60,34 +60,15 @@ export function recruiterCooldown(error, now = Date.now()) {
     const limits = rateHeaders(error?.headers)
     seconds = type === 'RPD' ? limits.dailyRequestsResetSeconds ?? 86400 : type === 'TPD' ? 86400 : type === 'TPM' ? limits.tokensResetSeconds ?? 60 : 60
   }
-  const limits = rateHeaders(error?.headers)
-  const reset = type === 'RPD' ? limits.dailyRequestsResetSeconds : type === 'TPM' ? limits.tokensResetSeconds : undefined
-  if (reset !== undefined) seconds = Math.max(seconds, reset)
-  // Saturate absurd numeric values safely; never retry before Retry-After.
+  // Retry-After describes this rejected request; reset headers may describe
+  // full bucket replenishment. Use reset only when Retry-After is absent.
+  // The independent admission meter still enforces the safety threshold.
   return { type, seconds: Math.max(1, Math.min(Math.ceil(seconds), Math.floor(Number.MAX_SAFE_INTEGER / 1000))) }
-}
-
-// Google supplies RetryInfo and QuotaFailure, not Groq's daily request headers.
-export function geminiCooldown(error, now = Date.now()) {
-  const raw = Array.isArray(error?.error) ? error.error[0] : error?.error
-  const body = raw?.error || raw || {}
-  const details = Array.isArray(body.details) ? body.details : []
-  const waits = details.filter(item => String(item['@type']).endsWith('/google.rpc.RetryInfo'))
-    .map(item => durationSeconds(item.retryDelay)).filter(value => value !== null)
-  const retry = header(error?.headers, 'retry-after')
-  const seconds = typeof retry === 'string' && /^\d+(?:\.\d+)?$/.test(retry.trim()) ? Number(retry) : typeof retry === 'string' ? (Date.parse(retry) - now) / 1000 : NaN
-  if (Number.isFinite(seconds) && seconds >= 0) waits.push(seconds)
-  const daily = details.filter(item => String(item['@type']).endsWith('/google.rpc.QuotaFailure'))
-    .some(item => Array.isArray(item.violations) && item.violations.some(violation => /per.?day|daily/i.test(String(violation.quotaId || ''))))
-  // A 24-hour policy hold requires an actual daily quota violation. Generic
-  // provider text can mention daily limits without identifying the exhausted one.
-  return { seconds: Math.max(1, Math.ceil(waits.length ? Math.max(...waits) : daily ? 86400 : 60)), origin: waits.length ? 'provider_retry' : daily ? 'daily_quota_violation' : 'unknown_quota_backoff' }
 }
 
 // One local process / Recruiter key. Unknown quotas are never replaced by defaults.
 export function createRecruiterTokenBudget({ now = Date.now, thresholdPercent = 85, maxAgeMs = 15000, probeIntervalMs = 60000 } = {}) {
   let sample = null
-  let latchedUntil = 0
   let nextProbeAt = 0
   let dailyUntil = 0
   let order = 0
@@ -99,7 +80,6 @@ export function createRecruiterTokenBudget({ now = Date.now, thresholdPercent = 
       nextProbeAt = 0 // A known reset permits a new user-request probe.
       for (const ticket of ledger) if (ticket.finished) ledger.delete(ticket)
     }
-    if (latchedUntil && time >= latchedUntil) latchedUntil = 0
     return time
   }
   function used() {
@@ -116,22 +96,23 @@ export function createRecruiterTokenBudget({ now = Date.now, thresholdPercent = 
     }
     return sample.used + extra
   }
-  const deferred = (reason, until) => ({ provider: 'gemini', reason, retryAfterSeconds: Math.max(1, Math.ceil((until - now()) / 1000)) })
+  const deferred = (reason, until) => ({ provider: 'deferred', reason, retryAfterSeconds: Math.max(1, Math.ceil((until - now()) / 1000)) })
   return {
+    deferProbeUntil(until) { nextProbeAt = until },
     reserve(estimate, outputBudget) {
       const time = advance()
       if (time < dailyUntil) return deferred('daily_quota_exhausted', dailyUntil)
-      if (time < latchedUntil) return deferred('threshold_latched', latchedUntil)
       const fresh = sample && time - sample.observedAt <= maxAgeMs
-      if (fresh && used() + estimate >= sample.limit * thresholdPercent / 100) {
+      if (sample && used() + estimate > sample.limit * thresholdPercent / 100) {
         // A request too large for the remaining budget does not establish that
         // current usage has reached the threshold. Reevaluate smaller requests.
         return deferred('tpm_threshold', sample.resetAt)
       }
       if (!fresh) {
-        // Serialize a real user request to learn headers; never send quota probes
-        // in the background or assume this interval is the provider's window.
-        if (time < nextProbeAt || [...ledger].some(ticket => !ticket.finished)) return deferred('quota_unknown_or_stale', Math.max(nextProbeAt, time + 1000))
+        // A safe known snapshot can be refreshed by one serialized request.
+        // Only completely unknown quota uses the separate probe timer.
+        const active = [...ledger].some(ticket => !ticket.finished)
+        if (active || !sample && time < nextProbeAt) return deferred('quota_unknown_or_stale', active ? time + 1000 : nextProbeAt)
         nextProbeAt = time + probeIntervalMs
       }
       const ticket = { issued: ++order, estimate, outputBudget, finished: 0, total: null, completion: null }
@@ -151,19 +132,16 @@ export function createRecruiterTokenBudget({ now = Date.now, thresholdPercent = 
       // Ignore late responses from requests older than our current snapshot.
       if (sample && ticket.issued < sample.ticket.issued) return
       const resetAt = time + reset * 1000
-      sample = { ticket, limit, used: Math.max(limit - remaining, sample?.used ?? 0), resetAt, observedAt: time }
+      sample = { ticket, limit, used: limit - remaining, resetAt, observedAt: time }
       for (const previous of ledger) if (previous !== ticket && previous.finished && previous.finished < ticket.issued) ledger.delete(previous)
-      if (latchedUntil) latchedUntil = Math.max(latchedUntil, resetAt)
-      if (used() >= limit * thresholdPercent / 100) latchedUntil = Math.max(latchedUntil, resetAt)
     },
     finish(ticket, usage) {
       if (!ticket) return
       ticket.finished = ++order
-      ticket.total = number(usage?.totalTokens)
+      ticket.total = number(usage?.totalTokens) ?? (number(usage?.promptTokens) !== null && number(usage?.completionTokens) !== null ? usage.promptTokens + usage.completionTokens : null)
       // Completion tokens already include reasoning; never add them twice.
       ticket.completion = number(usage?.completionTokens)
       if (!sample) ledger.delete(ticket)
-      else if (used() >= sample.limit * thresholdPercent / 100) latchedUntil = Math.max(latchedUntil, sample.resetAt)
     },
   }
 }

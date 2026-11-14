@@ -35,3 +35,8 @@ coverage
 .env.*
 !.env.example
 
+# Personal knowledge is server-only, never repository or frontend content.
+/server/private/
+/knowledge/**/*.json
+!/knowledge/schema.json
+

@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { test } from 'node:test'
-import { loadKnowledge } from '../knowledge/load.js'
+import { loadKnowledge, knowledgeRoot } from '../knowledge/load.js'
 import { FACT_STATUSES, isEligibleFact, validateFact, validateKnowledge } from '../knowledge/validation.js'
 import { createRecruiterAnswer } from '../src/services/assistant/recruiterResponder.js'
 import { splitMessageContent } from '../src/services/assistant/messageContent.js'
 
 const data = await loadKnowledge()
-const snapshot = JSON.parse(await readFile(new URL('../knowledge/personal-knowledge.json', import.meta.url)))
+const snapshot = JSON.parse(await readFile(new URL('personal-knowledge.json', knowledgeRoot())))
 const today = '2026-11-11'
 
 // Synthetic fixtures only. These approvals never touch personal knowledge files.

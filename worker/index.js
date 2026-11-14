@@ -1,32 +1,15 @@
-import index from '../knowledge/index.json'
-import profile from '../knowledge/profile.json'
-import education from '../knowledge/education.json'
-import skills from '../knowledge/skills.json'
-import indux from '../knowledge/experience/indux-technology.json'
-import entrepreneurship from '../knowledge/experience/entrepreneurship-network.json'
-import crm from '../knowledge/projects/crm.json'
-import neuroTen from '../knowledge/projects/neuro-ten.json'
-import ecommerce from '../knowledge/projects/ecommerce.json'
-import achievements from '../knowledge/achievements.json'
-import careerGoals from '../knowledge/career-goals.json'
-import availability from '../knowledge/availability.json'
-import links from '../knowledge/links.json'
-import experienceSummary from '../knowledge/experience/summary.json'
-import eventverse from '../knowledge/projects/eventverse.json'
-import violet from '../knowledge/projects/violet.json'
-import { validateKnowledge, todayUTC } from '../knowledge/validation.js'
+import { validateKnowledge, todayUTC, isEligibleFact } from '../knowledge/validation.js'
 import { createRecruiterService } from '../server/recruiter.js'
 import { buildMessages } from '../server/policy.js'
 import { validateChatInput } from '../server/validation.js'
 import { ConversationStream, completionBudget } from '../server/responseStream.js'
 import { PublicError, safeError } from '../server/errors.js'
 
-const modules = [profile, education, skills, indux, entrepreneurship, crm, neuroTen, ecommerce, achievements, careerGoals, availability, links, experienceSummary, eventverse, violet]
 const encoder = new TextEncoder()
 const decoder = new TextDecoder()
 const clients = new Map()
 let activeRequests = 0
-let knowledgeCache
+let recruiterState
 
 const integer = (value, fallback, min, max) => {
   const parsed = value === undefined || value === '' ? fallback : Number(value)
@@ -42,8 +25,7 @@ function config(env) {
     model: String(env.GROQ_MODEL || 'openai/gpt-oss-20b').trim(),
     recruiterApiKey: String(env.GROQ_RECRUITER_API_KEY || '').trim(),
     generalApiKey: String(env.GROQ_GENERAL_API_KEY || '').trim(),
-    geminiApiKey: String(env.GEMINI_RECRUITER_API_KEY || env.GEMINI_API_KEY || '').trim(),
-    geminiModel: String(env.GEMINI_RECRUITER_MODEL || env.GEMINI_MODEL || '').trim(),
+    fallbackApiKey: String(env.GROQ_FALLBACK_API_KEY || '').trim(),
     recruiterTpmThresholdPercent: integer(env.GROQ_RECRUITER_TPM_THRESHOLD_PERCENT, 85, 1, 100),
     recruiterQuotaMaxAgeMs: integer(env.GROQ_RECRUITER_QUOTA_MAX_AGE_MS, 15000, 1000, 120000),
     recruiterQuotaProbeMs: integer(env.GROQ_RECRUITER_QUOTA_PROBE_MS, 60000, 1000, 3600000),
@@ -111,14 +93,13 @@ async function* parseSse(body, signal) {
   }
 }
 
-function loadKnowledge() {
-  // Read the clock inside the request context, never during module startup.
+async function loadKnowledge(storage) {
+  if (!storage?.get) throw new PublicError(503, 'KNOWLEDGE_UNAVAILABLE', 'Verified background information is temporarily unavailable.')
+  const snapshot = await storage.get('approved-knowledge', { type: 'json' })
+  if (!snapshot?.index || !Array.isArray(snapshot.modules)) throw new PublicError(503, 'KNOWLEDGE_UNAVAILABLE', 'Verified background information is temporarily unavailable.')
   const today = todayUTC()
-  if (!knowledgeCache || knowledgeCache.today !== today) {
-    const knowledge = validateKnowledge(index, modules, { today })
-    knowledgeCache = { today, result: { errors: knowledge.errors, facts: knowledge.facts } }
-  }
-  return structuredClone(knowledgeCache.result)
+  const result = validateKnowledge(snapshot.index, snapshot.modules, { today })
+  return { errors: result.errors, facts: result.facts.filter(fact => isEligibleFact(fact, { today })) }
 }
 
 function workerConfig(env) {
@@ -182,16 +163,17 @@ async function chat(request, env, input, settings, origin) {
   request.signal.addEventListener('abort', abort, { once: true })
   const timer = setTimeout(() => controller.abort(), settings.timeoutMs)
   const groq = fetchProvider({ key: input.mode === 'general' ? settings.generalApiKey : settings.recruiterApiKey, baseUrl: 'https://api.groq.com/openai/v1' })
-  const gemini = settings.geminiApiKey && settings.geminiModel ? fetchProvider({ key: settings.geminiApiKey, baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai' }) : null
+  const fallback = settings.fallbackApiKey ? fetchProvider({ key: settings.fallbackApiKey, baseUrl: 'https://api.groq.com/openai/v1' }) : null
   const send = async enqueue => enqueue({ type: 'pending', mode: input.mode, timeoutMs: settings.timeoutMs })
   try {
     if (input.mode === 'recruiter') {
-      const service = createRecruiterService({ config: settings, groq, gemini, knowledgeLoader: loadKnowledge, acquire: () => {
+      const fingerprint = JSON.stringify(settings)
+      if (recruiterState?.fingerprint !== fingerprint || recruiterState?.storage !== env.KNOWLEDGE) recruiterState = { fingerprint, storage: env.KNOWLEDGE, service: createRecruiterService({ config: settings, groq, fallback, knowledgeLoader: () => loadKnowledge(env.KNOWLEDGE), acquire: () => {
         if (activeRequests >= settings.maxConcurrent) throw new PublicError(429, 'BUSY', 'Too many active AI responses. Please retry shortly.')
         activeRequests++
         return () => { activeRequests-- }
-      } })
-      const answer = await service.respond(input, { signal: controller.signal, deadlineAt: Date.now() + Math.min(settings.timeoutMs, 15000) })
+      } }) }
+      const answer = await recruiterState.service.respond(input, { signal: controller.signal, deadlineAt: Date.now() + Math.min(settings.timeoutMs, 15000) })
       return async enqueue => {
         await enqueue({ type: 'start', provider: answer.provider, mode: 'recruiter' })
         for (const text of answer.text.match(/[\s\S]{1,160}/g) || []) await enqueue({ type: 'delta', text })

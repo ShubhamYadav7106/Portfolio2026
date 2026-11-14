@@ -11,6 +11,9 @@ export default defineConfig({
 		host: '127.0.0.1',
 		port: 5173,
 		strictPort: true,
+		fs: {
+			deny: ['.env', '.env.*', '*.{crt,pem}', '**/.git/**', '**/server/private/**', '**/knowledge/**', '**/server/.env*']
+		},
 		proxy: {
 			'/api': { target: process.env.ASK_SHUBHAM_API_PROXY || 'http://127.0.0.1:3001', changeOrigin: true }
 		}

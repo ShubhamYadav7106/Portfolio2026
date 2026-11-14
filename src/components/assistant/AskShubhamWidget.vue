@@ -25,27 +25,55 @@ const canSend = computed(() => draft.value.trim().length > 0 && draft.value.leng
 const selectedSuggestions = ref({ recruiter: [], general: [] })
 // FAQ and quick actions use this same catalog and selectedSuggestions state.
 const recruiterSuggestions = [
+  ...[
+    ['Why should we hire Shubham?', 'Why hire Shubham?', 'fit', 'hiring-fit'],
+    ['Why should we hire him?', 'Why hire him?', 'fit', 'hiring-fit'],
+    ['What are his strengths?', 'Strengths', 'strengths'],
+    ['What is his weakness?', 'Growth areas', 'growth'],
+    ['Tell me about Shubham.', 'About Shubham', 'profile'],
+    ['What is his internship experience?', 'Internship experience', 'experience'],
+    ['What projects has he built?', 'His projects', 'projects', 'projects-overview'],
+    ['How does he handle challenges?', 'Challenges', 'growth'],
+    ['Is he willing to relocate?', 'Relocation', 'availability'],
+    ['When can he join?', 'Joining', 'availability', 'joining'],
+  ].map(([question, quick, topic, displayGroup]) => ({ question, quick, topic, displayGroup, hr: true, match: /hir(?:e|ing)|strength|weakness|challenge|background/i, related: ['skills', 'experience', 'projects'] })),
   { topic: 'skills', quick: 'Skills', label: 'What does Shubham work with?', detail: 'Core languages & technologies', question: 'What are Shubham’s main technical skills?', match: /skill|tech|stack|react|javascript/i, related: ['projects', 'experience'] },
   { topic: 'experience', quick: 'Internships', label: 'Tell me about his experience', detail: 'Roles & contributions', question: 'What experience does Shubham have?', match: /intern|experience|company|role|indux/i, related: ['projects', 'skills'] },
   { topic: 'skills', quick: 'Full Tech Stack', label: 'Full Tech Stack', detail: 'All skills, organized by category', question: 'What is Shubham’s full tech stack?', match: /skill|tech|stack/i, related: ['projects', 'experience'] },
-  { topic: 'projects', quick: 'Featured Projects', label: 'Which projects should I explore?', detail: 'Portfolio projects & company work', question: 'What projects has Shubham worked on?', match: /project|built|crm|eventverse/i, related: ['experience', 'skills', 'github'] },
+  { topic: 'projects', displayGroup: 'projects-overview', quick: 'Featured Projects', label: 'Which projects should I explore?', detail: 'Portfolio projects & company work', question: 'What projects has Shubham worked on?', match: /project|built|crm|eventverse/i, related: ['experience', 'skills', 'github'] },
   { topic: 'projects', quick: 'Real-World Project', label: 'What real-world project has Shubham worked on?', detail: 'Practical internship & company work', question: 'What real-world project has Shubham worked on?', match: /real.world|crm/i, related: ['experience', 'skills'] },
   { topic: 'contact', quick: 'Contact', label: 'How can I get in touch?', detail: 'Email & LinkedIn', question: 'How can I contact Shubham?', match: /contact|email|reach/i, related: ['resume', 'availability', 'linkedin'] },
   { topic: 'education', quick: 'Education', label: 'Where is he studying?', detail: 'Degree & university', question: 'What is Shubham studying, and at which university?', match: /educat|college|degree|course|university/i, related: ['achievements', 'skills'] },
   { topic: 'achievements', quick: 'Achievements', label: 'What has he achieved?', detail: 'Awards & recognition', question: 'What awards has Shubham received?', match: /award|achiev|certif|hackathon/i, related: ['projects', 'education'] },
   { topic: 'resume', quick: 'Resume', label: 'Where can I view his résumé?', detail: 'View his professional background', question: 'Where can I view Shubham’s résumé?', match: /resume|résumé|\bcv\b/i, related: ['experience', 'contact'] },
-  { topic: 'availability', quick: 'Availability', label: 'When can he join?', detail: 'Joining & opportunities', question: 'When can Shubham join a job or internship?', match: /availab|join|hiring|relocat/i, related: ['contact', 'resume'] },
+  { topic: 'availability', displayGroup: 'joining', quick: 'Availability', label: 'When can he join?', detail: 'Joining & opportunities', question: 'When can Shubham join a job or internship?', match: /availab|join|hiring|relocat/i, related: ['contact', 'resume'] },
   { topic: 'experience', quick: 'Training', label: 'Explore his training experience', question: 'What training experience does Shubham have?', match: /train(?:ing|ee)/i, related: ['skills', 'projects'] },
   { topic: 'experience', quick: 'Internship Timeline', label: 'Explore his internship and training timeline', question: 'Show Shubham’s internship and training timeline with roles, companies, dates and durations.', match: /timeline|chronolog|dates|duration/i, related: ['resume', 'skills', 'projects'] },
   { topic: 'github', quick: 'GitHub', label: 'Explore his GitHub profile', detail: 'His public developer profile', question: 'What is Shubham’s GitHub profile link?', match: /github|repositori/i, related: ['projects', 'skills', 'linkedin'] },
   { topic: 'linkedin', quick: 'LinkedIn', label: 'Connect with him on LinkedIn', detail: 'His professional profile', question: 'What is Shubham’s LinkedIn profile link?', match: /linkedin|linkdin/i, related: ['resume', 'experience', 'contact'] },
 ]
 const suggestionKey = question => question.trim().toLowerCase().replace(/[?.!]+$/, '')
+// Equivalence groups affect display/rotation only; submitted question text and
+// the complete catalog stay intact. Distinct scopes (core/full skills, training/
+// internships, and personal/company projects) remain separate suggestions.
+const displaySuggestionKey = (question, selectedMode = activeMode.value) => selectedMode === 'recruiter'
+  ? recruiterSuggestions.find(item => suggestionKey(item.question) === suggestionKey(question))?.displayGroup || suggestionKey(question)
+  : suggestionKey(question)
 const suggestionPool = computed(() => {
-  const options = activeMode.value === 'recruiter' ? recruiterSuggestions : [...mode.value.suggestions, ...mode.value.followups]
-  return [...new Map(options.map(item => [suggestionKey(item.question), item])).values()]
+  const options = activeMode.value === 'recruiter'
+    ? [...recruiterSuggestions.filter(item => !item.hr), ...recruiterSuggestions.filter(item => item.hr)]
+    : [...mode.value.suggestions, ...mode.value.followups]
+  if (activeMode.value !== 'recruiter') return [...new Map(options.map(item => [suggestionKey(item.question), item])).values()]
+  // Prefer existing descriptive questions, then the first clearly named HR
+  // version, without moving or duplicating the original starter FAQs.
+  const unique = new Map()
+  for (const item of options) {
+    const key = displaySuggestionKey(item.question)
+    if (!unique.has(key)) unique.set(key, item)
+  }
+  return [...unique.values()]
 })
-const unusedSuggestions = computed(() => suggestionPool.value.filter(item => !selectedSuggestions.value[activeMode.value].includes(suggestionKey(item.question))))
+const unusedSuggestions = computed(() => suggestionPool.value.filter(item => !selectedSuggestions.value[activeMode.value].includes(displaySuggestionKey(item.question))))
 const starterSuggestions = computed(() => unusedSuggestions.value.filter(item => item.detail))
 const quickActions = computed(() => {
   if (activeMode.value !== 'recruiter') return unusedSuggestions.value.filter(item => !item.detail).slice(0, 2)
@@ -54,7 +82,15 @@ const quickActions = computed(() => {
   const currentTopics = recruiterSuggestions.filter(item => item.match.test(latest))
   const related = new Set(currentTopics.flatMap(item => item.related))
   const score = item => (related.has(item.topic) ? 2 : 0) - (questions.some(question => item.match.test(question)) ? 3 : 0)
-  return [...unusedSuggestions.value].sort((a, b) => score(b) - score(a)).slice(0, isMobile.value ? 2 : 4)
+  const available = [...unusedSuggestions.value].sort((a, b) => score(b) - score(a))
+  // Offer every remaining unused question before wrapping to the next cycle.
+  // Fill the final row without duplicate meanings or the just-selected question.
+  if (available.length < 4) {
+    const remaining = new Set(available.map(item => displaySuggestionKey(item.question)))
+    const latestUsed = selectedSuggestions.value.recruiter.at(-1)
+    available.push(...suggestionPool.value.filter(item => !remaining.has(displaySuggestionKey(item.question)) && displaySuggestionKey(item.question) !== latestUsed).sort((a, b) => score(b) - score(a)))
+  }
+  return available.slice(0, 4)
 })
 
 function chooseSuggestion(item) {
@@ -118,8 +154,14 @@ function resizeComposer() {
 function submit(question = draft.value) {
   const submittedMode = activeMode.value
   if (!send(question)) return false
-  const key = suggestionKey(question)
-  if (suggestionPool.value.some(item => suggestionKey(item.question) === key) && !selectedSuggestions.value[submittedMode].includes(key)) selectedSuggestions.value[submittedMode].push(key)
+  const key = displaySuggestionKey(question, submittedMode)
+  if (suggestionPool.value.some(item => displaySuggestionKey(item.question, submittedMode) === key)) {
+    // A wrapped quick reply starts the next cycle. General Mode retains its
+    // existing session-only behavior.
+    if (submittedMode === 'recruiter' && selectedSuggestions.value[submittedMode].includes(key)) selectedSuggestions.value[submittedMode] = []
+    if (!selectedSuggestions.value[submittedMode].includes(key)) selectedSuggestions.value[submittedMode].push(key)
+    if (submittedMode === 'recruiter' && !unusedSuggestions.value.length) selectedSuggestions.value[submittedMode] = [key]
+  }
   drafts.value[submittedMode] = ''
   unread.value = false
   void nextTick(resizeComposer)

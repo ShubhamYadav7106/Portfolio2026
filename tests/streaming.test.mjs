@@ -25,7 +25,8 @@ test('the frontend sends a bounded same-mode history to its local endpoint witho
   await streamChat('question', { mode: 'general', history, fetchImpl: async (url, options) => {
     assert.equal(url, '/api/chat')
     assert.equal(options.credentials, 'omit')
-    assert.deepEqual(Object.keys(options.headers), ['Content-Type'])
+    assert.deepEqual(Object.keys(options.headers), ['Content-Type', 'Accept'])
+    assert.equal(options.headers.Accept, 'application/x-ndjson')
     const body = JSON.parse(options.body)
     assert.ok(body.history.length <= 16)
     assert.ok(body.history.every(item => item.mode === 'general' && !item.text.includes('Other mode')))
@@ -104,17 +105,12 @@ test('stop propagates to fetch and a client timeout has a safe distinct error', 
   await assert.rejects(streamChat('question', { timeoutMs: 5, fetchImpl }), { code: 'TIMEOUT' })
 })
 
-test('mock replies require an explicit development flag and cannot activate in production', async () => {
+test('frontend always uses the backend, including development with the old mock flag', async () => {
   for (const [development, flag] of [[true, false], [true, true], [false, true]]) {
     const result = await build({
       entryPoints: ['src/services/assistant/chatProvider.js'], bundle: true, write: false, format: 'esm', platform: 'node',
       define: { 'import.meta.env.DEV': String(development), 'import.meta.env.VITE_CHAT_MOCK': JSON.stringify(String(flag)) },
-      plugins: [{ name: 'mock-test-fixtures', setup(builder) {
-        builder.onResolve({ filter: /\/(mockResponder|knowledgeStore)$/ }, args => ({ path: args.path, namespace: 'fixture' }))
-        builder.onLoad({ filter: /.*/, namespace: 'fixture' }, args => ({ contents: args.path.endsWith('mockResponder')
-          ? 'export const createMockResponder = () => async () => ({ text: "Explicit mock", provider: "mock" })'
-          : 'export const knowledgeFacts = []', loader: 'js' }))
-      } }],
+
     })
     const provider = await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`)
     let calls = 0
@@ -122,8 +118,8 @@ test('mock replies require an explicit development flag and cannot activate in p
       calls++
       return responseFor([start, { type: 'delta', text: 'API stream' }, done])
     } })
-    assert.equal(provider.isMockDevelopment, development && flag)
-    assert.equal(reply.provider, development && flag ? 'mock' : 'groq')
-    assert.equal(calls, development && flag ? 0 : 1)
+    assert.equal(provider.isMockDevelopment, false)
+    assert.equal(reply.provider, 'groq')
+    assert.equal(calls, 1)
   }
 })

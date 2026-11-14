@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { test } from 'node:test'
-import { loadKnowledge } from '../knowledge/load.js'
+import { loadKnowledge, knowledgeRoot } from '../knowledge/load.js'
 import { isEligibleFact } from '../knowledge/validation.js'
 import { digest, mergeDraftKnowledge } from '../scripts/lib/merge-draft-knowledge.mjs'
 
 const data = await loadKnowledge()
-const report = JSON.parse(await readFile(new URL('../knowledge/imports/full-knowledge-8396a1422e64.report.json', import.meta.url)))
+const report = JSON.parse(await readFile(new URL('imports/full-knowledge-8396a1422e64.report.json', knowledgeRoot())))
 const raw = await readFile(new URL('../' + report.source.archive, import.meta.url), 'utf8')
 const draft = JSON.parse(raw)
 const source = { sourceName: report.source.name, sourceHash: report.source.sha256, archivePath: report.source.archive }

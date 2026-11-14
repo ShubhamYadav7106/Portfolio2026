@@ -139,27 +139,38 @@ next provider call. `GROQ_RECRUITER_TPM_THRESHOLD_PERCENT=85` means a reported
 assumed quota. The admission estimate includes the incoming request, full output
 allowance and outstanding/concurrent token reservations. Headers are reconciled
 with actual usage when available; ambiguous overlap is counted conservatively.
-Crossing the threshold latches Gemini routing until the reported reset. Active
-responses keep their provider, and no background quota-check requests are made.
+Each Recruiter account has its own token reservations, fresh headers, threshold
+check, daily/minute cooldowns and serialized quota probe. A known cooldown/reset
+permits a new probe; unknown quota never implies unlimited capacity. The meters
+are process-local and would need shared state for multiple backend replicas.
 
-Without fresh complete quota headers, at most one real user request probes Groq
-at a time, with `GROQ_RECRUITER_QUOTA_PROBE_MS=60000` between unknown-quota probes.
-Other new requests route to Gemini. This is a probe policy, not an invented Groq
-window or token allowance. `GROQ_RECRUITER_QUOTA_MAX_AGE_MS=15000` bounds header age;
-a known reset permits a new serialized probe. A Groq HTTP 429 rejected before
-streaming is the only reactive fallback; partial responses are never regenerated
-by another provider. Retry-After remains authoritative and Gemini has a separate
-cooldown. Cached/local answers remain available during cooldowns.
+Set `GROQ_FALLBACK_API_KEY` to a separate Groq account's key in `server/.env`.
+Both accounts use the existing Groq client and `GROQ_MODEL`, with SDK retries
+disabled. General Mode retains its separate key and existing request flow.
+The client continues to see provider `groq`; redacted terminal logs and metrics
+identify the account as `groq` or `groq-fallback`. Gemini is no longer used.
 
-Set `GEMINI_RECRUITER_API_KEY` and `GEMINI_RECRUITER_MODEL` in `server/.env`.
-Existing `GEMINI_API_KEY` / `GEMINI_MODEL` settings are also accepted. No Gemini
-model or quota is guessed when configuration is absent: quota-unsafe requests
-fail safely instead of sending more Groq traffic. Gemini uses Google's fixed
-OpenAI-compatible endpoint through the existing transport, with retries disabled.
-It receives the same scoped approved context and grounding validation as Groq.
-The client streaming protocol identifies Gemini honestly. General Mode retains
-its existing separate Groq key and routing. This meter is process-local and
-requires shared state if the backend is ever replicated.
+Direct FAQ answers remain local. Generated answers use the same plain-text
+request contract as General Mode, without a JSON wrapper or an AI review call.
+Personal requests receive only eligible public approved context, with explicit
+grounding and privacy instructions. Internal source IDs identify supplied context;
+they are not a claim that every generated assertion was independently verified.
+General questions have no personal evidence and keep the separate General Mode hint.
+
+Completion budgets adapt to request length, conversation context, evidence size
+and requested detail, within MAX_COMPLETION_TOKENS. The allowance includes hidden
+reasoning and visible output; the complete allowance is reserved for admission.
+Reported usage reconciles reservations without adding reasoning tokens twice.
+Stale but safe quota snapshots may be refreshed by one serialized request without
+waiting for the unknown-quota probe timer. Retry-After is respected independently
+of the reported full bucket reset; admission still enforces the configured threshold.
+
+At most one alternative account is attempted per generation, within
+the original request deadline. No same-account retries, background quota probes,
+or partial-stream regeneration occur. A normal request uses one call; bounded
+fallback can add one attempt. Both accounts are checked before local quota refusal.
+Validated replies enter the cache before the shared in-flight request is removed,
+preventing a second generation during final knowledge-snapshot validation.
 
 ## Local controls
 
@@ -363,3 +374,11 @@ qualifications/metric claims) remain excluded and documented in ../knowledge/REA
 They do not justify inventing missing answers. Bounded typo/Hinglish support is not
 unrestricted multilingual understanding; ambiguous or unsupported queries may still
 return the honest fallback. Uncached nuanced questions remain subject to Groq quotas.
+
+## Private knowledge storage
+
+Personal knowledge is provisioned separately in ignored `server/private/knowledge/`
+(owner-only permissions), or through `PERSONAL_KNOWLEDGE_DIR`. No JSON data is
+shipped in the frontend or Worker source. See `../knowledge/README.md` for private
+Worker KV provisioning and public-only export. Frontend builds do not require
+access to the knowledge store. Existing Git history is not erased by this move.

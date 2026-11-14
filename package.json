@@ -9,7 +9,7 @@
   "private": true,
   "scripts": {
     "dev": "vite",
-    "build": "npm run validate:knowledge && vite build",
+    "build": "vite build",
     "preview": "vite preview",
     "test": "node --test tests/*.test.mjs && npm run test:server",
     "test:browser": "node tests/assistant.browser.mjs",

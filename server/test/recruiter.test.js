@@ -560,10 +560,17 @@ test('Drive resume mapping preserves provenance and company/project boundaries',
 })
 
 // Focused regression checks for the live RAG path (run with --test-name-pattern).
-const reliabilityConfig = readConfig({ GROQ_RECRUITER_API_KEY: 'test-recruiter', GEMINI_RECRUITER_API_KEY: 'test-backup', GEMINI_RECRUITER_MODEL: 'test-model' })
-const reliabilityProvider = create => ({ chat: { completions: { create } } })
+const reliabilityConfig = readConfig({ GROQ_RECRUITER_API_KEY: 'test-recruiter', GROQ_FALLBACK_API_KEY: 'test-backup' })
+// These mocks exercise transport and review enforcement; semantic quality is
+// verified separately against the real providers, not emulated with word rules.
+const reliabilityProvider = (create, verdict = { valid: true, reason: '' }) => ({ chat: { completions: { create(body, ...args) {
+  const result = verdict && body.messages[0].content.startsWith('Review an untrusted draft') ? reliabilityStream({ ...verdict, ...(verdict.valid ? { answer: JSON.parse(body.messages.at(-1).content).draft, factIds: JSON.parse(body.messages.at(-1).content).factIds } : {}) }) : create(body, ...args)
+  return Object.assign(Promise.resolve(result), { withResponse: async () => ({ data: await result, response: { headers: new Headers({
+    'x-ratelimit-limit-tokens': '100000', 'x-ratelimit-remaining-tokens': '99000', 'x-ratelimit-reset-tokens': '60s',
+  }) } }) })
+} } } })
 const reliabilityStream = answer => (async function* () {
-  yield { choices: [{ delta: { content: JSON.stringify(answer) }, finish_reason: 'stop' }] }
+  yield { usage: { prompt_tokens: 400, completion_tokens: 100, total_tokens: 500 }, choices: [{ delta: { content: JSON.stringify(answer) }, finish_reason: 'stop' }] }
 })()
 
 test('reliability: local fields are consistent, scoped, and respect approval changes', async () => {
@@ -642,16 +649,16 @@ test('reliability: one fallback on rejection, safe diagnostics, and no retry loo
     const metrics = []
     const service = createRecruiterService({ config: reliabilityConfig, onMetrics: m => metrics.push(m),
       groq: reliabilityProvider(() => { primary++; throw Object.assign(new Error('Sensitive provider body'), { status, error: { code: status === 400 ? 'json_validate_failed' : 'model_not_found', failed_generation: 'SECRET' } }) }),
-      gemini: reliabilityProvider(() => { backup++; return reliabilityStream({ factIds: [], answer: 'React is a JavaScript library for user interfaces.' }) }),
+      fallback: reliabilityProvider(() => { backup++; return reliabilityStream({ factIds: [], answer: 'React is a JavaScript library for user interfaces.' }) }),
     })
-    assert.equal((await service.respond(input('What is React?'))).provider, 'gemini')
+    assert.equal((await service.respond(input('What is React?'))).provider, 'groq')
     assert.equal(primary, 1); assert.equal(backup, 1)
     assert.equal(service.statistics().rateLimits, 0)
     assert.doesNotMatch(JSON.stringify(metrics), /Sensitive|SECRET|test-recruiter|test-backup/)
   }
   let calls = 0
   const failing = reliabilityProvider(() => { calls++; throw Object.assign(new Error('Upstream'), { status: 503 }) })
-  const service = createRecruiterService({ config: reliabilityConfig, groq: failing, gemini: failing })
+  const service = createRecruiterService({ config: reliabilityConfig, groq: failing, fallback: failing })
   await assert.rejects(service.respond(input('What is React?')), { code: 'AI_UNAVAILABLE' })
   assert.equal(calls, 2)
 })
@@ -683,7 +690,7 @@ test('reliability: quota threshold, reset recovery, daily holds and stale header
   const first = meter.reserve(100, 10)
   meter.observe(first.ticket, new Headers({ 'x-ratelimit-limit-tokens': '8000', 'x-ratelimit-remaining-tokens': '1300', 'x-ratelimit-reset-tokens': '10s' }))
   meter.finish(first.ticket, { totalTokens: 100, completionTokens: 10 })
-  assert.equal(meter.reserve(100, 10).provider, 'gemini')
+  assert.equal(meter.reserve(100, 10).provider, 'deferred')
   time += 10001
   const next = meter.reserve(100, 10)
   assert.equal(next.provider, 'groq')
@@ -696,25 +703,410 @@ test('reliability: quota threshold, reset recovery, daily holds and stale header
   assert.equal(meter.reserve(100, 10).reason, 'quota_unknown_or_stale')
 })
 
-test('recovery: bounded retry, fallback, deadlines and cancellation', async () => {
+test('quota accounting: provisional output is released without latching the account', () => {
+  for (const thresholdPercent of [80, 85]) {
+    const meter = createRecruiterTokenBudget({ thresholdPercent })
+    const first = meter.reserve(2000, 1800)
+    meter.observe(first.ticket, new Headers({ 'x-ratelimit-limit-tokens': '10000', 'x-ratelimit-remaining-tokens': '3000', 'x-ratelimit-reset-tokens': '60s' }))
+    assert.equal(meter.reserve(100, 10).provider, 'deferred')
+    meter.finish(first.ticket, { promptTokens: 200, completionTokens: 50, totalTokens: 250 })
+    const remaining = 10000 * thresholdPercent / 100 - 7050
+    assert.equal(meter.reserve(remaining + 1, 10).provider, 'deferred')
+    assert.equal(meter.reserve(remaining, 10).provider, 'groq', 'Admission may reach, but never exceed, the configured threshold')
+  }
+})
+
+test('quota accounting: concurrent actual usage replaces estimates and reasoning is not added twice', () => {
+  const meter = createRecruiterTokenBudget()
+  const first = meter.reserve(100, 100)
+  meter.observe(first.ticket, new Headers({ 'x-ratelimit-limit-tokens': '10000', 'x-ratelimit-remaining-tokens': '4000', 'x-ratelimit-reset-tokens': '60s' }))
+  const concurrent = meter.reserve(2000, 1000)
+  assert.equal(concurrent.provider, 'groq')
+  assert.equal(meter.reserve(500, 10).provider, 'deferred')
+  meter.finish(concurrent.ticket, { promptTokens: 100, completionTokens: 100, reasoningTokens: 90 })
+  assert.equal(meter.reserve(2200, 10).provider, 'groq', '6000 reported + 100 outstanding output + 200 actual + 2200 = 8500')
+})
+
+test('quota accounting: newer replenished headers replace old usage; stale and out-of-order headers cannot bypass protection', () => {
+  let time = 100000
+  const meter = createRecruiterTokenBudget({ now: () => time })
+  const first = meter.reserve(100, 100)
+  const headers = remaining => new Headers({ 'x-ratelimit-limit-tokens': '10000', 'x-ratelimit-remaining-tokens': String(remaining), 'x-ratelimit-reset-tokens': '60s' })
+  meter.observe(first.ticket, headers(3000))
+  meter.finish(first.ticket, { totalTokens: 200, completionTokens: 100 })
+  const next = meter.reserve(100, 100)
+  meter.observe(next.ticket, headers(5000))
+  meter.finish(next.ticket, { totalTokens: 200, completionTokens: 100 })
+  meter.observe(first.ticket, headers(9000))
+  assert.equal(meter.reserve(3401, 10).provider, 'deferred')
+  const outstanding = meter.reserve(3400, 10)
+  assert.equal(outstanding.provider, 'groq', 'The latest provider usage is 5000, not the old 7000 high-water mark')
+  time += 16000
+  assert.equal(meter.reserve(100, 10).provider, 'deferred', 'Staleness cannot erase outstanding reservations or the safety threshold')
+  meter.finish(outstanding.ticket, { totalTokens: 100, completionTokens: 10 })
+  time += 45000
+  assert.equal(meter.reserve(100, 10).provider, 'groq', 'A real reset allows a serialized probe')
+})
+
+test('recovery: one alternative account, no same-account retries, deadlines and cancellation', async () => {
   const { recoverRecruiterRequest } = await import('../recruiter.js')
   const controller = new AbortController()
-  let calls = 0
-  const waits = []
-  const options = { signal: controller.signal, timeoutMs: 15000, clock: () => 0, wait: async ms => waits.push(ms) }
-  assert.equal(await recoverRecruiterRequest(async () => { if (++calls === 1) throw { recoverable: true, retryAfterSeconds: 4 }; return 'ok' }, options), 'ok')
-  assert.equal(calls, 2); assert.deepEqual(waits, [4000])
   const routes = []
-  await assert.rejects(recoverRecruiterRequest(async provider => { routes.push(provider); throw Object.assign(new Error('temporary'), { recoverable: true, canUseGemini: !provider }) }, options))
-  assert.deepEqual(routes, [undefined, 'gemini', 'gemini'])
-  calls = 0
-  await assert.rejects(recoverRecruiterRequest(async () => { calls++; throw { recoverable: true, retryAfterSeconds: 60 } }, options))
+  await assert.rejects(recoverRecruiterRequest(async provider => { routes.push(provider); throw Object.assign(new Error('temporary'), { canUseFallback: true }) }, { signal: controller.signal, timeoutMs: 15000 }))
+  assert.deepEqual(routes, [undefined, 'groq-fallback'])
+  let calls = 0
+  await assert.rejects(recoverRecruiterRequest(async () => { calls++; throw { recoverable: true, retryAfterSeconds: 4 } }, { signal: controller.signal, timeoutMs: 15000 }))
   assert.equal(calls, 1)
-  calls = 0
-  await assert.rejects(recoverRecruiterRequest(async () => { calls++; throw new Error('configuration') }, options))
+  controller.abort()
+  await assert.rejects(recoverRecruiterRequest(async () => { calls++; }, { signal: controller.signal, timeoutMs: 15000 }), { name: 'AbortError' })
   assert.equal(calls, 1)
-  const stopped = new AbortController()
-  const pending = recoverRecruiterRequest(async () => { throw { recoverable: true } }, { signal: stopped.signal, timeoutMs: 15000 })
-  setImmediate(() => stopped.abort())
-  await assert.rejects(pending, { name: 'AbortError' })
+})
+
+
+test('HR suggestions: assessments retrieve balanced approved evidence and generate with the existing provider', async () => {
+  const { isRecruiterAssessmentRequest } = await import('../policy.js')
+  const { factKind } = await import('../../src/services/assistant/recruiterResponder.js')
+  const facts = await currentPublicFacts()
+  for (const message of ['Why should we hire Shubham?', 'Why should we hire him?', 'What makes him a good fit for a frontend role?', 'What can he contribute to our team?', 'What are his strengths?', 'What is his weakness?', 'Tell me about Shubham.', 'How does he handle challenges?']) {
+    assert.equal(isRecruiterAssessmentRequest(input(message)), true, message)
+    const relevant = retrieveRecruiterRagFacts(input(message), facts)
+    for (const category of ['experience', 'project']) assert.ok(relevant.some(f => f.category === category), `${message}: ${category}`)
+    assert.ok(relevant.some(f => factKind(f) === 'contribution'), `${message}: practical contributions`)
+    assert.ok(relevant.every(f => facts.some(approved => approved.id === f.id)))
+    assert.ok(relevant.length <= 48)
+    assert.doesNotMatch(JSON.stringify(relevant), /Neuro TEN|pending_review/)
+    let calls = 0
+    const service = createRecruiterService({ config: reliabilityConfig, groq: reliabilityProvider(body => {
+      calls++
+      assert.equal(body.messages.at(-1).content, message)
+      assert.match(body.messages[0].content, /do not invent a personal flaw|Never present humor as a factual assessment/i)
+      const context = JSON.parse(body.messages[0].content.split('APPROVED_FACTS:\n')[1])
+      const career = context.find(f => f.kind === 'contribution')
+      assert.ok(career)
+      if (/Why should we hire/.test(message)) {
+        const role = context.find(f => f.kind === 'role')
+        const contribution = context.find(f => f.kind === 'contribution' && f.group === role.group)
+        assert.ok(contribution)
+        return reliabilityStream({ factIds: [career.id, role.id, contribution.id], answer: `His ${role.value} work included ${contribution.value}. That is a relevant foundation to consider for an entry-level role. ${career.value}` })
+      }
+      return reliabilityStream({ factIds: [career.id], answer: career.value })
+    }) })
+    assert.equal((await service.respond(input(message))).provider, 'groq')
+    assert.equal(calls, 1)
+  }
+  assert.equal(isRecruiterAssessmentRequest(input('What about weaknesses?', [{ role: 'user', content: 'Tell me about Shubham.' }])), true)
+  assert.equal(isRecruiterAssessmentRequest(input('What are the strengths of React?')), false)
+  assert.equal(isRecruiterGeneralQuestion(input('What are the strengths of React?'), facts), true)
+})
+
+test('HR suggestions: missing personal evidence stays honest and provider failures never become fabricated replies', async () => {
+  const empty = async () => ({ facts: [], errors: [] })
+  let calls = 0
+  const service = createRecruiterService({ config: reliabilityConfig, groq: reliabilityProvider(() => {
+    calls++
+    return reliabilityStream({ factIds: [], answer: 'I don’t have a confirmed personal weakness to share.' })
+  }) })
+  assert.match((await service.respond(input('What is his weakness?'))).text, /don’t have/)
+  assert.equal(calls, 1)
+  const unavailable = createRecruiterService({ config: reliabilityConfig, groq: reliabilityProvider(() => { throw Object.assign(new Error('redacted'), { status: 401 }) }) })
+  await assert.rejects(unavailable.respond(input('Why should we hire him?')), { code: 'PROVIDER_CONFIGURATION' })
+  const general = createRecruiterService({ config: reliabilityConfig, knowledgeLoader: empty, groq: reliabilityProvider(() => reliabilityStream({ factIds: [], answer: 'React encourages reusable UI components.' })) })
+  const answer = await general.respond(input('What are the strengths of React?'))
+  assert.equal(answer.generalQuestion, true)
+  assert.equal(answer.provider, 'groq')
+})
+
+test('answer fallback: direct answers stay exact; paraphrases, missing facts and grounding use safe provider paths', async () => {
+  const { recruiterFactualAnswer, recruiterQuestion } = await import('../policy.js')
+  const facts = await currentPublicFacts()
+  const direct = createRecruiterService({ config: reliabilityConfig, groq: reliabilityProvider(() => { throw new Error('Direct answers must not call a provider') }) })
+  for (const message of ['his full name', 'How can I contact Shubham?', 'When can he join?', 'his schooling']) {
+    const expected = recruiterFactualAnswer(input(recruiterQuestion(message)), facts)
+    assert.ok(expected)
+    assert.deepEqual(await direct.respond(input(message)), expected)
+  }
+  let primary = 0, backup = 0
+  const service = createRecruiterService({ config: reliabilityConfig,
+    groq: reliabilityProvider(() => { primary++; return reliabilityStream({ factIds: ['f999'], answer: 'Unsupported claim.' }) }),
+    fallback: reliabilityProvider(body => {
+      backup++
+      assert.doesNotMatch(JSON.stringify(body.messages), /Unsupported claim/)
+      const context = JSON.parse(body.messages[0].content.split('APPROVED_FACTS:\n')[1])
+      const career = context.find(f => f.kind === 'contribution')
+      assert.ok(career)
+      return reliabilityStream({ factIds: [career.id], answer: career.value })
+    }),
+  })
+  assert.equal((await service.respond(input('Why would he be a suitable candidate?'))).provider, 'groq')
+  assert.equal(primary, 1); assert.equal(backup, 1)
+  const missing = createRecruiterService({ config: reliabilityConfig, groq: reliabilityProvider(() => reliabilityStream({ factIds: [], answer: 'I don’t have that detail. You can ask Shubham directly.' })) })
+  const result = await missing.respond(input('Could you explain his family background?'))
+  assert.match(result.text, /don’t have that detail/)
+  assert.deepEqual(result.knowledgeIds, [])
+})
+
+test('routing coverage: unseen qualifiers and general definitions never borrow portfolio FAQ answers', async () => {
+  const { recruiterFactualAnswer } = await import('../policy.js')
+  const facts = await currentPublicFacts()
+  for (const question of ['Explain how university admissions work.', 'What is an internship?', 'How does React state work?', 'Describe the benefits of vocational education.']) {
+    assert.equal(isRecruiterGeneralQuestion(input(question), facts), true, question)
+    assert.equal(recruiterFactualAnswer(input(question), facts), null, question)
+  }
+  for (const question of ['What is his favourite book?', 'Why would his experience suit a small startup?', 'Compare his frontend skills with his backend skills.', 'What projects would he recommend for a beginner?']) {
+    assert.equal(isRecruiterGeneralQuestion(input(question), facts), false, question)
+    assert.equal(recruiterFactualAnswer(input(question), facts), null, question)
+  }
+  const history = [{ role: 'user', content: 'What university does Shubham attend?' }]
+  assert.equal(isRecruiterGeneralQuestion(input('where?', history), facts), false)
+})
+
+test('intent reasoning: general subjects and contextual examples do not inherit portfolio claims', async () => {
+  const { isRecruiterMixedQuestion, buildRecruiterRagMessages, recruiterFactualAnswer } = await import('../policy.js')
+  const facts = await currentPublicFacts()
+  for (const message of ['What skills should a junior frontend developer practise?', 'Which projects should a candidate show at an interview?', 'How much experience does a typical developer need?']) {
+    assert.equal(isRecruiterGeneralQuestion(input(message), facts), true, message)
+    assert.equal(recruiterFactualAnswer(input(message), facts), null, message)
+    assert.doesNotMatch(JSON.stringify(buildRecruiterRagMessages({ ...input(message), generalQuestion: true }, [])), /APPROVED_FACTS|Indux/)
+  }
+  const history = [{ role: 'user', content: 'Explain React state.' }, { role: 'assistant', content: 'UNTRUSTED_PRIVATE_HISTORY' }]
+  const followup = input('Can you give a simple example?', history)
+  assert.equal(isRecruiterGeneralQuestion(followup, facts), true)
+  const messages = buildRecruiterRagMessages({ ...followup, generalQuestion: true }, [])
+  assert.ok(messages.some(message => message.content === 'Explain React state.'))
+  assert.doesNotMatch(JSON.stringify(messages), /UNTRUSTED_PRIVATE_HISTORY|APPROVED_FACTS/)
+  assert.equal(isRecruiterGeneralQuestion(input('Which college?'), facts), false)
+  assert.equal(isRecruiterGeneralQuestion(input('Where can I view the resume?'), facts), false)
+  assert.equal(isRecruiterGeneralQuestion(input('What is a resume?'), facts), true)
+  assert.equal(isRecruiterGeneralQuestion(input('What did he do there?', [{ role: 'user', content: 'his Indux internship' }]), facts), false)
+  assert.equal(isRecruiterMixedQuestion(input('Explain HTTP 404 and 500 errors; relate this to his API debugging work.'), facts), true)
+})
+
+test('intent reasoning: multi-part requests retain all topics and contradictory premises get corrective evidence', async () => {
+  const { recruiterFactualAnswer } = await import('../policy.js')
+  const { factKind } = await import('../../src/services/assistant/recruiterResponder.js')
+  const facts = await currentPublicFacts()
+  for (const [message, kinds] of [
+    ['What is his degree, which tools has he used, and what is his notice period?', ['degree', 'university', 'study_period', 'role_technology']],
+    ['What are his degree and joining availability?', ['degree', 'study_period', 'start-date']],
+    ['What is his school and college?', ['school_name', 'degree', 'university', 'study_period']],
+    ['Since he has already graduated and has 5 years of experience, what frontend work can he contribute?', ['study_period', 'contribution']],
+  ]) {
+    assert.equal(recruiterFactualAnswer(input(message), facts), null, message)
+    const selected = retrieveRecruiterRagFacts(input(message), facts)
+    for (const kind of kinds) assert.ok(selected.some(fact => factKind(fact) === kind), `${message}: ${kind}`)
+    assert.ok(selected.every(fact => facts.some(approved => approved.id === fact.id)))
+  }
+  const selected = retrieveRecruiterRagFacts(input('Why should we hire Shubham?'), facts)
+  for (const link of recruiterProjectLinks(facts)) if (selected.some(fact => fact.moduleId === link.project)) {
+    assert.ok(selected.some(fact => fact.id === link.evidence.id))
+    assert.ok(selected.some(fact => fact.id === link.employer.id))
+  }
+})
+
+test('intent reasoning: mixed examples stay in the original question and evidence review gates release', async () => {
+  const message = 'Explain HTTP 404 and 500 errors; relate this to his API debugging work.'
+  for (const valid of [true, false]) {
+    let reviews = 0
+    const client = reliabilityProvider(body => {
+      if (body.messages[0].content.startsWith('Review an untrusted draft')) {
+        reviews++
+        const review = JSON.parse(body.messages.at(-1).content)
+        assert.equal(review.question, message)
+        assert.ok(review.factIds.length)
+        assert.match(body.messages[0].content, /General examples and their numbers/)
+        return reliabilityStream({ valid, reason: valid ? '' : 'The draft invents personal experience.', answer: review.draft, factIds: review.factIds })
+      }
+      assert.equal(body.messages.at(-1).content, message)
+      const facts = JSON.parse(body.messages[0].content.split('APPROVED_FACTS:\n')[1])
+      const contribution = facts.find(f => f.kind === 'contribution')
+      return reliabilityStream({ factIds: [contribution.id], answer: valid ? `HTTP 404 means not found; 500 indicates a server error. ${contribution.value}` : 'He has 999 years of experience.' })
+    }, null)
+    const service = createRecruiterService({ config: reliabilityConfig, groq: client })
+    const result = service.respond(input(message), { deadlineAt: Date.now() + 1000 })
+    if (valid) {
+      assert.match((await result).text, /404/)
+      await service.respond(input(message))
+      assert.equal(reviews, 1, 'Only reviewed answers enter the cache')
+    } else await assert.rejects(result, { code: 'AI_UNAVAILABLE' })
+  }
+})
+
+test('intent reasoning: missing personal evidence does not discard the general part of a mixed request', async () => {
+  const client = reliabilityProvider(body => reliabilityStream({ factIds: [], answer: body.messages[0].content.includes('APPROVED_FACTS:')
+    ? 'I don’t have that detail. You can ask Shubham directly.' : 'HTTP 404 means a resource was not found.' }))
+  const service = createRecruiterService({ config: reliabilityConfig, knowledgeLoader: async () => ({ facts: [], errors: [] }), groq: client, fallback: client })
+  const result = await service.respond(input('Explain HTTP 404; has he debugged similar API problems?'))
+  assert.match(result.text, /HTTP 404/)
+  assert.match(result.text, /don’t have that detail/)
+  assert.deepEqual(result.knowledgeIds, [])
+})
+
+
+test('intent reasoning: a mixed request reuses the complete direct personal answer with one generation', async () => {
+  const { recruiterFactualAnswer } = await import('../policy.js')
+  const facts = await currentPublicFacts()
+  const expected = recruiterFactualAnswer(input('what is his degree'), facts)
+  let calls = 0
+  const service = createRecruiterService({ config: reliabilityConfig, groq: reliabilityProvider(body => {
+    calls++
+    assert.doesNotMatch(JSON.stringify(body.messages), /APPROVED_FACTS|Graphic Era|Shubham Yadav/)
+    return reliabilityStream({ factIds: [], answer: 'REST APIs use standard HTTP methods for stateless communication.' })
+  }) })
+  const answer = await service.respond(input('Explain REST APIs; what is his degree?'))
+  assert.equal(calls, 1)
+  assert.ok(answer.text.endsWith(expected.text))
+  assert.deepEqual(answer.knowledgeIds, expected.knowledgeIds)
+  const resume = await service.respond(input('Where can I view the resume?'))
+  assert.equal(resume.provider, 'knowledge')
+  assert.match(resume.text, /https:\/\/drive\.google\.com\/file\/d\//)
+  assert.equal(calls, 1)
+})
+
+
+test('intent reasoning: expected education dates cannot become completed-degree claims', async () => {
+  const client = reliabilityProvider(body => {
+    const facts = JSON.parse(body.messages[0].content.split('APPROVED_FACTS:\n')[1])
+    const degree = facts.find(fact => fact.kind === 'degree')
+    assert.ok(facts.some(fact => fact.kind === 'study_period' && /expected/i.test(fact.value)))
+    return reliabilityStream({ factIds: [degree.id], answer: 'He holds a B.Tech degree.' })
+  }, { valid: false, reason: 'The answer omits supported parts or invents personal claims.' })
+  const service = createRecruiterService({ config: reliabilityConfig, groq: client, fallback: client })
+  await assert.rejects(service.respond(input('What are his degree and joining availability?'), { deadlineAt: Date.now() + 1000 }), { code: 'AI_UNAVAILABLE' })
+})
+
+
+test('intent reasoning: a blanket refusal cannot discard supported parts of a compound request', async () => {
+  const client = reliabilityProvider(() => reliabilityStream({ factIds: [], answer: 'I don’t have that detail. You can ask Shubham directly.' }), { valid: false, reason: 'The answer ignores supported parts.' })
+  const service = createRecruiterService({ config: reliabilityConfig, groq: client, fallback: client })
+  await assert.rejects(service.respond(input('What are his degree and joining availability?'), { deadlineAt: Date.now() + 1000 }), { code: 'AI_UNAVAILABLE' })
+})
+
+test('logged failures: requirements are assessment context and career criteria are a general question', async () => {
+  const { isRecruiterMixedQuestion, recruiterRequestParts, recruiterMatchedSkills, buildRecruiterRagMessages } = await import('../policy.js')
+  const facts = await currentPublicFacts()
+  for (const message of [
+    'Our company uses React, Node.js, and PostgreSQL. How well does Shubham fit our requirements?',
+    'We need React and Node.js with PostgreSQL; is he a suitable candidate for our team?',
+  ]) {
+    assert.equal(isRecruiterMixedQuestion(input(message), facts), false)
+    const selected = retrieveRecruiterRagFacts(input(message), facts)
+    for (const fact of recruiterMatchedSkills(input(message), facts)) assert.ok(selected.some(f => f.id === fact.id))
+  }
+  const mixed = input("What qualifications are required to become the CEO of Google, and how do Shubham's current qualifications compare?")
+  assert.equal(isRecruiterMixedQuestion(mixed, facts), true)
+  assert.equal(recruiterRequestParts(mixed, facts)[0].general, true)
+  const selected = retrieveRecruiterRagFacts(mixed, facts)
+  assert.ok(selected.some(f => f.category === 'education'))
+  assert.ok(selected.some(f => f.category === 'experience'))
+  const prompt = buildRecruiterRagMessages(input('Would you recommend him for a senior backend developer role?'), facts)[0].content
+  assert.match(prompt, /make conditional recommendations/)
+  assert.match(prompt, /"grounding":"supported"/)
+  assert.doesNotMatch(prompt, /\["id",\.\.\.\]/)
+})
+
+test('logged failures: empty refusals, omitted topics and missing recommendations fail even with citations', async () => {
+  const cases = [
+    ["What qualifications are required to become the CEO of Google, and how do Shubham's current qualifications compare?", () => 'I don’t have that detail. You can ask Shubham directly.'],
+    ['Since Shubham has five years of Java and Spring Boot experience, would you recommend him for a senior backend developer role?', () => 'Shubham is a Full Stack Developer with Java skills. You can ask Shubham directly.'],
+    ['What are his degree and joining availability?', () => 'He is pursuing a B.Tech in Computer Science & Engineering.'],
+    ['Our company uses React, Node.js, and PostgreSQL. How well does Shubham fit our requirements?', () => 'His internship work with React is a relevant foundation for this role.'],
+  ]
+  for (const [message, answer] of cases) {
+    const client = reliabilityProvider(body => {
+      const context = body.messages[0].content.split('APPROVED_FACTS:\n')[1]
+      if (!context) return reliabilityStream({ factIds: [], answer: 'Executive roles generally require substantial leadership experience.' })
+      const facts = JSON.parse(context)
+      return reliabilityStream({ factIds: facts.map(f => f.id), answer: answer(facts) })
+    }, { valid: false, reason: 'The answer omits supported parts or invents personal claims.' })
+    const service = createRecruiterService({ config: reliabilityConfig, groq: client, fallback: client })
+    await assert.rejects(service.respond(input(message), { deadlineAt: Date.now() + 1000 }), { code: 'AI_UNAVAILABLE' }, message)
+  }
+})
+
+test('logged failures: general technical I/O and general experience criteria are not personal claims', async () => {
+  const replies = [
+    'Node.js uses an event-driven, non-blocking I/O model.',
+    'Executive candidates typically need many years of experience leading large organizations; there is no universal degree requirement.',
+  ]
+  for (const answer of replies) {
+    const client = reliabilityProvider(body => {
+      const context = body.messages[0].content.split('APPROVED_FACTS:\n')[1]
+      if (!context) return reliabilityStream({ factIds: [], answer })
+      const facts = JSON.parse(context)
+      const contribution = facts.find(f => f.kind === 'contribution')
+      return reliabilityStream({ factIds: [contribution.id], answer: `${answer} ${contribution.value}` })
+    })
+    const service = createRecruiterService({ config: reliabilityConfig, groq: client, fallback: client })
+    const result = await service.respond(input('Explain Node.js I/O with 2 examples; how does his internship work relate to it?'))
+    assert.ok(result.text.startsWith(answer))
+  }
+})
+
+test('logged failures: listed technologies cannot be promoted to documented internship use', async () => {
+  const message = 'Our company uses React, Node.js, and PostgreSQL. How well does Shubham fit our requirements?'
+  const client = reliabilityProvider(body => {
+    const facts = JSON.parse(body.messages[0].content.split('APPROVED_FACTS:\n')[1])
+    return reliabilityStream({ factIds: facts.map(f => f.id), answer: 'Shubham has hands-on experience with React, Node.js and PostgreSQL during his internship at Indux Technology. He applied these technologies to the CRM project and is a good fit.' })
+  }, { valid: false, reason: 'The answer omits supported parts or invents personal claims.' })
+  const service = createRecruiterService({ config: reliabilityConfig, groq: client, fallback: client })
+  await assert.rejects(service.respond(input(message), { deadlineAt: Date.now() + 1000 }), { code: 'AI_UNAVAILABLE' })
+})
+
+test('logged failures: intern wording preserves company context and an omitted employer still fails', async () => {
+  for (const namedEmployer of [true, false]) {
+    const client = reliabilityProvider(body => {
+      const facts = JSON.parse(body.messages[0].content.split('APPROVED_FACTS:\n')[1])
+      const project = facts.find(f => f.kind === 'project_name')
+      const role = facts.find(f => f.kind === 'role')
+      const employer = facts.find(f => f.kind === 'employer' && f.group === role.group)
+      return reliabilityStream({ factIds: [project.id, role.id, employer.id], answer: `As a Full Stack Developer Intern${namedEmployer ? ` at ${employer.value}` : ''}, Shubham worked on ${project.value}. This is a relevant foundation to consider for an entry-level role.` })
+    }, { valid: namedEmployer, reason: namedEmployer ? '' : 'The company project lost its employer context.' })
+    const service = createRecruiterService({ config: reliabilityConfig, groq: client, fallback: client })
+    const reply = service.respond(input('Why should we hire Shubham?'), { deadlineAt: Date.now() + 1000 })
+    if (namedEmployer) assert.equal((await reply).provider, 'groq')
+    else await assert.rejects(reply, { code: 'AI_UNAVAILABLE' })
+  }
+})
+
+test('logged failures: requested assessments use the configured completion allowance and request natural prose without post-processing', async () => {
+  const identity = 'I’m Ask Shubham AI, Shubham’s personal portfolio AI assistant.'
+  const client = reliabilityProvider(body => {
+    const facts = JSON.parse(body.messages[0].content.split('APPROVED_FACTS:\n')[1])
+    if (body.messages.at(-1).content === 'Who are you?') return reliabilityStream({ factIds: [], answer: identity })
+    assert.equal(body.max_completion_tokens, reliabilityConfig.maxCompletionTokens)
+    const degree = facts.find(f => f.kind === 'degree')
+    return reliabilityStream({ factIds: [degree.id], answer: `His B.Tech programme provides a technical foundation, whereas executive roles typically involve broader business leadership.` })
+  })
+  const service = createRecruiterService({ config: reliabilityConfig, groq: client, fallback: client })
+  const result = await service.respond(input('How do his current qualifications compare with executive role expectations?'))
+  assert.ok(result.text.startsWith('His B.Tech'))
+  assert.equal((await service.respond(input('Who are you?'))).text, identity)
+})
+
+
+test('natural generation: ordinary mixed questions use one grounded request and preserve original wording', async () => {
+  const message = 'Explain REST APIs and relate them to his documented internship work.'
+  let calls = 0
+  const client = reliabilityProvider(body => {
+    calls++
+    assert.equal(body.messages.at(-1).content, message)
+    assert.match(body.messages[0].content, /Use general knowledge/)
+    assert.ok(body.messages[0].content.length < 11000)
+    const facts = JSON.parse(body.messages[0].content.split('APPROVED_FACTS:\n')[1])
+    const contribution = facts.find(f => f.kind === 'contribution')
+    return reliabilityStream({ factIds: [contribution.id], answer: `REST APIs connect applications through HTTP. His internship work included ${contribution.value}.` })
+  })
+  const service = createRecruiterService({ config: reliabilityConfig, groq: client, fallback: client })
+  assert.match((await service.respond(input(message))).text, /REST APIs/)
+  assert.equal(calls, 1)
+})
+
+
+test('natural generation: a reviewed missing-information acknowledgement needs no invented citation', async () => {
+  const answer = 'I’m not aware of any information about Shubham Yadav’s favorite book.'
+  const client = reliabilityProvider(() => reliabilityStream({ factIds: [], answer }))
+  const service = createRecruiterService({ config: reliabilityConfig, groq: client, fallback: client })
+  assert.equal((await service.respond(input('What is his favourite book?'))).text, answer)
+  const unsafe = reliabilityProvider(() => reliabilityStream({ factIds: [], answer: 'I don’t have information about his book, but he works at Acme.' }), { valid: false, reason: 'Acme employment is unsupported.' })
+  await assert.rejects(createRecruiterService({ config: reliabilityConfig, groq: unsafe, fallback: unsafe }).respond(input('What is his favourite book?'), { deadlineAt: Date.now() + 1000 }), { code: 'AI_UNAVAILABLE' })
 })

@@ -1,11 +1,16 @@
 import { readFile, stat } from 'node:fs/promises'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { resolve, sep } from 'node:path'
 import { validateKnowledge, todayUTC } from './validation.js'
 
 // The server opts into caching; other callers retain the existing loader API.
+export const knowledgeRoot = () => process.env.PERSONAL_KNOWLEDGE_DIR
+  ? pathToFileURL(resolve(process.env.PERSONAL_KNOWLEDGE_DIR) + sep)
+  : new URL('../server/private/knowledge/', import.meta.url)
+
 export function createCachedKnowledgeLoader() {
-  const directory = fileURLToPath(new URL('./', import.meta.url))
+  const root = knowledgeRoot()
+  const directory = fileURLToPath(root)
   const indexFile = resolve(directory, 'index.json')
   let entry = null
   const signature = async files => JSON.stringify(await Promise.all(files.map(async file => {
@@ -20,7 +25,7 @@ export function createCachedKnowledgeLoader() {
     if (entry?.result && entry.files === files && entry.day === day && entry.signature === before) return structuredClone(entry.result)
     // Never fall back to old approvals after a changed, missing or invalid file.
     entry = null
-    const result = await loadKnowledge({ today: day })
+    const result = await loadKnowledge({ root, today: day })
     if (result.errors.length) return result
     const nextFiles = [indexFile, ...result.index.modules.map(path => resolve(directory, path))]
     const after = await signature(nextFiles)
@@ -32,7 +37,7 @@ export function createCachedKnowledgeLoader() {
   }
 }
 
-export async function loadKnowledge({ root = new URL('./', import.meta.url), today } = {}) {
+export async function loadKnowledge({ root = knowledgeRoot(), today } = {}) {
   const directory = fileURLToPath(root)
   const index = JSON.parse(await readFile(resolve(directory, 'index.json'), 'utf8'))
   if (!Array.isArray(index.modules)) throw new Error('Knowledge index must list modules')

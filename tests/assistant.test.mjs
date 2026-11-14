@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises'
 import { effectScope } from 'vue'
 import { build } from 'esbuild'
 import portfolio from '../src/portfolio.js'
-import { loadKnowledge } from '../knowledge/load.js'
+import { loadKnowledge, knowledgeRoot } from '../knowledge/load.js'
 import { isEligibleFact } from '../knowledge/validation.js'
 
 // Compile Vite-style JSON and extensionless imports without starting a server or
@@ -21,7 +21,7 @@ async function loadModule(entryPoint) {
 const { createMockAnswer, respondWithMock } = await loadModule('src/services/assistant/mockResponder.js')
 const { MODES } = await loadModule('src/services/assistant/modes.js')
 const { useChat, MAX_MESSAGE_LENGTH } = await loadModule('src/composables/useChat.js')
-const knowledge = JSON.parse(await readFile(new URL('../knowledge/personal-knowledge.json', import.meta.url)))
+const knowledge = JSON.parse(await readFile(new URL('personal-knowledge.json', knowledgeRoot())))
 const { facts } = await loadKnowledge()
 const reviewDate = '2026-11-11'
 const tick = () => new Promise(resolve => setImmediate(resolve))
@@ -324,4 +324,50 @@ test('mode switching and clearing ignore late stream callbacks even if abort is 
   finish({ text: 'Late answer', sources: [] })
   await tick()
   assert.equal(chat.messages.value.length, 0)
+})
+
+test('HR suggestions: shared submission, responsive quick actions and no-repeat state', async () => {
+  const { parse, compileTemplate } = await import('@vue/compiler-sfc')
+  const { runInNewContext } = await import('node:vm')
+  const source = await readFile(new URL('../src/components/assistant/AskShubhamWidget.vue', import.meta.url), 'utf8')
+  const { descriptor, errors } = parse(source)
+  assert.deepEqual(errors, [])
+  assert.deepEqual(compileTemplate({ source: descriptor.template.content, filename: 'AskShubhamWidget.vue', id: 'hr-suggestions' }).errors, [])
+  assert.match(descriptor.template.content, /activeMode === 'recruiter' && hrSuggestions.length/)
+  assert.ok(source.indexOf('class="hr-questions"') > source.indexOf('class="welcome-description"'))
+  const script = descriptor.scriptSetup.content
+  const catalog = script.slice(script.indexOf('const selectedSuggestions ='), script.indexOf('let mobileQuery'))
+  const submit = script.slice(script.indexOf('function submit('), script.indexOf('function onComposerKeydown('))
+  const reset = script.slice(script.indexOf('function clearChat('), script.indexOf('function followSource('))
+  const sent = []
+  let busy = false
+  const sandbox = {
+    ref: value => ({ value }), computed: getter => ({ get value() { return getter() } }),
+    activeMode: { value: 'recruiter' }, mode: { value: MODES.recruiter }, isMobile: { value: false }, messages: { value: [] },
+    draft: { value: '' }, drafts: { value: { recruiter: '', general: '' } }, unread: { value: false },
+    send: question => { if (busy) return false; sent.push(question); return true }, clear() {}, resizeComposer() {},
+    nextTick: callback => Promise.resolve(callback()), panel: { value: { focus() {} } }, composer: { value: { focus() {} } },
+  }
+  runInNewContext(`${catalog}\n${submit}\n${reset}\nglobalThis.state = { hrSuggestions, starterSuggestions, quickActions, chooseSuggestion, clearChat };`, sandbox)
+  const state = sandbox.state
+  const expected = ['Why should we hire Shubham?', 'Why should we hire him?', 'What are his strengths?', 'What is his weakness?', 'Tell me about Shubham.', 'What is his internship experience?', 'What projects has he built?', 'How does he handle challenges?', 'Is he willing to relocate?', 'When can he join?']
+  assert.deepEqual(Array.from(state.hrSuggestions.value, item => item.question), expected)
+  assert.equal(state.starterSuggestions.value[2].label, 'Full Tech Stack')
+  assert.equal(state.quickActions.value.length, 4)
+  sandbox.isMobile.value = true
+  assert.equal(state.quickActions.value.length, 2)
+  const first = state.hrSuggestions.value[0]
+  busy = true
+  state.chooseSuggestion(first)
+  assert.equal(sent.length, 0)
+  assert.equal(state.hrSuggestions.value.length, 10)
+  busy = false
+  for (const suggestion of [...state.hrSuggestions.value]) state.chooseSuggestion(suggestion)
+  assert.deepEqual(sent, expected)
+  assert.equal(state.hrSuggestions.value.length, 0)
+  assert.ok(state.quickActions.value.every(item => !expected.includes(item.question)))
+  state.clearChat()
+  assert.equal(state.hrSuggestions.value.length, 10)
+  sandbox.activeMode.value = 'general'; sandbox.mode.value = MODES.general
+  assert.equal(state.hrSuggestions.value.length, 0)
 })

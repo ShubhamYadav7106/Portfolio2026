@@ -1,15 +1,13 @@
 import Groq from 'groq-sdk'
 import { loadServerConfig } from './config.js'
 import { createApp } from './app.js'
-import { createGeminiProvider } from './recruiter.js'
 
 const config = loadServerConfig()
 const makeProvider = apiKey => apiKey ? new Groq({ apiKey, timeout: config.timeoutMs, maxRetries: 0 }) : null
 const groqRecruiter = makeProvider(config.recruiterApiKey)
 const groqGeneral = makeProvider(config.generalApiKey)
-// Gemini's OpenAI-compatible API reuses the existing transport, without SDK retries.
-const geminiRecruiter = createGeminiProvider(config)
-const app = createApp({ config, groqRecruiter, groqGeneral, geminiRecruiter,
+const groqFallback = makeProvider(config.fallbackApiKey)
+const app = createApp({ config, groqRecruiter, groqGeneral, groqFallback,
   onProviderError: (code, details) => console.warn(`Ask Shubham AI: ${code}`, details),
   onRecruiterMetrics: details => console.info('Ask Shubham AI recruiter metrics:', details),
 })

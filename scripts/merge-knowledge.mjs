@@ -1,6 +1,6 @@
 import { readFile, writeFile, mkdir } from 'node:fs/promises'
 import { basename } from 'node:path'
-import { loadKnowledge } from '../knowledge/load.js'
+import { loadKnowledge, knowledgeRoot } from '../knowledge/load.js'
 import { digest, mergeDraftKnowledge } from './lib/merge-draft-knowledge.mjs'
 
 const sourcePath = process.argv[2]
@@ -8,7 +8,7 @@ if (!sourcePath) throw new Error('Usage: node scripts/merge-knowledge.mjs /path/
 const raw = await readFile(sourcePath, 'utf8')
 const draft = JSON.parse(raw)
 const hash = digest(raw)
-const root = new URL('../knowledge/', import.meta.url)
+const root = knowledgeRoot()
 const archivePath = `knowledge/imports/full-knowledge-${hash.slice(0, 12)}.json`
 const reportPath = new URL(`imports/full-knowledge-${hash.slice(0, 12)}.report.json`, root)
 const current = await loadKnowledge({ root })
