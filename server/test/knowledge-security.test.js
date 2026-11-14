@@ -6,10 +6,10 @@ import { readdir, stat } from 'node:fs/promises'
 import { build } from 'esbuild'
 import { createServer } from 'vite'
 import { loadKnowledge, knowledgeRoot } from '../../knowledge/load.js'
-import { isEligibleFact } from '../../knowledge/validation.js'
+import { isEligibleFact, validateKnowledge } from '../../knowledge/validation.js'
 import { createApp } from '../app.js'
 import { readConfig } from '../config.js'
-import { currentPublicFacts, recruiterFactualAnswer } from '../policy.js'
+import { currentPublicFacts, recruiterFactualAnswer, retrieveRecruiterRagFacts, buildRecruiterRagMessages, isRecruiterGeneralQuestion, buildMessages } from '../policy.js'
 import { createRecruiterService } from '../recruiter.js'
 
 const root = new URL('../../', import.meta.url)
@@ -134,4 +134,76 @@ test('Worker reads private storage through its binding and sends only approved p
   assert.doesNotMatch(output, /PRIVATE_SENTINEL|PENDING_SENTINEL|approvalReference|approvedValue/)
   assert.equal(calls, 1)
   assert.ok(reads >= 2)
+})
+
+const projectFixture = (id, title, visibility = 'public') => ({
+  schemaVersion: 2, id, title, category: 'project', presentation: [],
+  facts: [
+    ['projectname', 'Project name', title + ' — Document Workspace'],
+    ['description', 'Project description', 'A document workspace with searchable records and a modular interface.'],
+    ['techstack', 'Project technologies', 'JavaScript, SQLite'],
+  ].map(([kind, label, value]) => ({
+    id: `${id}-${kind}`, title: label, value, status: 'verified', visibility, legacyEntryId: null,
+    sources: [{ type: 'owner', reference: 'Synthetic fixture only' }],
+    verification: { approvedBy: 'Fixture', approvedAt: '2026-01-01', approvalReference: 'Synthetic fixture only', approvedValue: value },
+    freshness: { asOf: '2026-01-01', reviewAfter: '2027-12-31' },
+  })),
+})
+const projectDataset = () => {
+  const modules = [projectFixture('project-orbit', 'Orbit Lab'), projectFixture('project-cedar', 'Cedar Engine'), projectFixture('project-hidden', 'Hidden Workspace', 'private')]
+  return validateKnowledge({ schemaVersion: 2, assistantName: 'Fixture', modules: modules.map(module => module.id + '.json') }, modules)
+}
+
+test('dynamic projects: canonical metadata resolves unseen project titles and prioritizes their evidence', () => {
+  const data = projectDataset()
+  assert.deepEqual(data.errors, [])
+  for (const [title, id] of [['Orbit Lab', 'project-orbit'], ['Cedar Engine', 'project-cedar']]) {
+    const request = input(`How is ${title} put together?`)
+    assert.equal(isRecruiterGeneralQuestion(request, data.facts), false)
+    const selected = retrieveRecruiterRagFacts(request, data.facts)
+    assert.ok(selected.length >= 3)
+    assert.ok(selected.every(fact => fact.moduleId === id))
+    assert.ok(selected.some(fact => fact.id === id + '-description'))
+    assert.ok(selected.some(fact => fact.id === id + '-techstack'))
+    assert.ok(selected.every(fact => fact.visibility === 'public'))
+  }
+  const followup = { ...input('How is it put together?'), history: [
+    { role: 'user', content: 'Discuss Orbit Lab.' },
+    { role: 'assistant', content: 'Cedar Engine is the relevant project.' },
+  ] }
+  assert.ok(retrieveRecruiterRagFacts(followup, data.facts).every(fact => fact.moduleId === 'project-orbit'))
+})
+
+test('dynamic projects: safe runtime metadata follows configured accounts while current facts outrank assistant history', async () => {
+  const dataset = projectDataset()
+  for (const fallbackEnabled of [true, false]) {
+    let calls = 0
+    const config = readConfig({ GROQ_RECRUITER_API_KEY: 'SYNTHETIC_PRIMARY', GROQ_FALLBACK_API_KEY: fallbackEnabled ? 'SYNTHETIC_FALLBACK' : '', GROQ_GENERAL_API_KEY: 'SYNTHETIC_GENERAL', GROQ_MODEL: 'fixture/model' })
+    const client = { chat: { completions: { create(body) {
+      calls++
+      const system = body.messages[0].content
+      const marker = 'RUNTIME_CONFIGURATION: '
+      const runtime = JSON.parse(system.slice(system.indexOf(marker) + marker.length).split('\n')[0])
+      assert.deepEqual(runtime.recruiter.map(account => account.role), fallbackEnabled ? ['primary', 'fallback'] : ['primary'])
+      assert.ok(runtime.recruiter.every(account => account.provider === 'groq' && account.model === config.model))
+      assert.deepEqual(runtime.general, { configured: true, provider: 'groq', model: config.model })
+      assert.doesNotMatch(JSON.stringify(body), /SYNTHETIC_PRIMARY|SYNTHETIC_FALLBACK|SYNTHETIC_GENERAL/)
+      assert.match(system, /Current APPROVED_FACTS take precedence over conversation history/)
+      const facts = JSON.parse(system.split('APPROVED_FACTS:\n')[1])
+      assert.ok(facts.some(fact => fact.value === 'JavaScript, SQLite'))
+      assert.ok(body.messages.some(message => message.role === 'assistant' && message.content.includes('outdated-provider')))
+      return (async function* () { yield { choices: [{ delta: { content: 'A naturally generated explanation of the documented workspace.' }, finish_reason: 'stop' }] } })()
+    } } } }
+    const service = createRecruiterService({ config, groq: client, fallback: fallbackEnabled ? client : null, knowledgeLoader: async () => dataset })
+    const request = { ...input('How is Orbit Lab put together?'), history: [{ role: 'assistant', content: 'An earlier answer claimed outdated-provider was used.' }] }
+    const answer = await service.respond(request)
+    assert.match(answer.text, /naturally generated/)
+    assert.equal(calls, 1)
+    await service.respond(request)
+    assert.equal(calls, 1, 'Identical current evidence and runtime configuration reuse the cache')
+  }
+  const general = buildMessages({ mode: 'general', message: 'Explain queues.', history: [] })
+  assert.doesNotMatch(JSON.stringify(general), /RUNTIME_CONFIGURATION|APPROVED_FACTS/)
+  const recruiterGeneral = buildRecruiterRagMessages({ ...input('Explain queues.'), generalQuestion: true, runtimeConfiguration: { secret: 'SYNTHETIC_SENTINEL' } }, [])
+  assert.doesNotMatch(JSON.stringify(recruiterGeneral), /SYNTHETIC_SENTINEL|RUNTIME_CONFIGURATION/)
 })

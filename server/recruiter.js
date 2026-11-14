@@ -72,7 +72,7 @@ function localSocialReply(message) {
 export function createRecruiterService({ config, groq, fallback, knowledgeLoader, acquire = () => () => {}, onMetrics = () => {}, now = Date.now, cacheTtlMs = 300000, cacheMax = 128 }) {
   const cache = new Map()
   const flights = new Map()
-  const makeAccount = (client, key) => ({ client, key, cooldown: null, dailyCooldown: null,
+  const makeAccount = (client, key) => ({ client, key, provider: 'groq', model: config.model, cooldown: null, dailyCooldown: null,
     budget: createRecruiterTokenBudget({ now, thresholdPercent: config.recruiterTpmThresholdPercent ?? 85, maxAgeMs: config.recruiterQuotaMaxAgeMs ?? 15000, probeIntervalMs: config.recruiterQuotaProbeMs ?? 60000 }),
   })
   const accounts = {
@@ -307,6 +307,11 @@ export function createRecruiterService({ config, groq, fallback, knowledgeLoader
     const mixed = mixedIntent && Boolean(personalFactual)
     const generalInput = mixed ? { ...input, generalQuestion: true, message: parts.filter(part => part.general).map(part => part.message).join('; ') } : null
     const generalMessages = mixed ? buildRecruiterRagMessages(generalInput, []) : null
+    input = { ...input, runtimeConfiguration: {
+      recruiter: Object.entries(accounts).filter(([, account]) => account.client && account.key)
+        .map(([name, account]) => ({ role: name === 'groq' ? 'primary' : 'fallback', provider: account.provider, model: account.model })),
+      general: { configured: Boolean(config.generalApiKey), provider: accounts.groq.provider, model: config.model },
+    } }
     const relevant = input.generalQuestion || mixed ? [] : retrieveRecruiterRagFacts(input, facts)
     requestLog('retrieval', { factIds: relevant.map(fact => fact.id) })
     const messages = mixed ? generalMessages : buildRecruiterRagMessages(input, relevant)

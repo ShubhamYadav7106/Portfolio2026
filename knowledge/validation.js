@@ -80,7 +80,7 @@ export function validateKnowledge(index, modules, { today = todayUTC() } = {}) {
       errors.push(...validateFact(fact, { today }).map(error => `${path} / ${fact?.id || '?'}: ${error}`))
       if (factIds.has(fact?.id)) errors.push(`${path}: Duplicate fact ID ${fact.id}`)
       factIds.add(fact?.id)
-      facts.push({ ...fact, category: module.category, moduleId: module.id })
+      facts.push({ ...fact, category: module.category, moduleId: module.id, moduleTitle: module.title })
       if (fact?.status === 'verified' && isDate(fact.freshness?.reviewAfter) && fact.freshness.reviewAfter < today) warnings.push(`${fact.id}: Review deadline passed; excluded from recruiter answers`)
     }
     for (const item of module.presentation) {

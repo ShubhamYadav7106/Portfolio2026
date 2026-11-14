@@ -262,6 +262,7 @@ export function recruiterEntityAliases(fact) {
   const words = value.split(/[,(]/)[0].match(/[\p{L}]+/gu) || []
   return [...new Set([
     normalizeRecruiterQuestion(value),
+    ...(kind === 'project_name' && fact.moduleTitle ? [normalizeRecruiterQuestion(fact.moduleTitle)] : []),
     ...[...value.matchAll(/\(([A-Za-z]{2,12})\)/g)].map(match => match[1].toLowerCase()),
     ...(words.length > 1 ? [words.map(word => word[0]).join('').toLowerCase()] : []),
     ...(words.length === 1 && /^[A-Z][A-Z0-9]{2,}$/.test(words[0]) ? [words[0].toLowerCase()] : []),
@@ -430,7 +431,10 @@ export function retrieveRecruiterRagFacts(input, facts) {
   const contextual = !named && (!topics.length && contextDependent(question) || /\b(?:it|its|that|those|these|there|former|latter|previous)\b/.test(question) || /^(?:his )?(?:stack|tools|technologies|repo|repository|demo)[?!.]*$/.test(question))
   const history = recruiterConversation(input)
   const recentUser = [...history].reverse().find(item => item.role === 'user' && tokens(item.content).length && !/^(?:and )?(?:where|when|why|more|tell me more)[?!.]*$/.test(recruiterQuestion(item.content)))?.content || ''
-  const contextText = contextual ? `${recentUser} ${history.at(-1)?.content || ''}` : ''
+  // A user's explicit entity reference outranks entities introduced by an
+  // earlier assistant answer. Assistant text remains topic context otherwise.
+  const userEntity = documents.some(({ fact }) => mentions(recentUser, fact))
+  const contextText = contextual ? userEntity ? recentUser : `${recentUser} ${history.at(-1)?.content || ''}` : ''
   const contextTerms = tokens(contextText)
   const contextTopics = contextual ? concepts.filter(([, pattern]) => pattern.test(normalizeRecruiterQuestion(recentUser))).map(([category]) => category) : []
   const requested = new Set([...topics, ...contextTopics])
@@ -496,6 +500,13 @@ export function retrieveRecruiterRagFacts(input, facts) {
     // orphaned project name that could be mistaken for independent work.
     if (selected.size + pending.length > limit || size + cost > budget) return
     for (const fact of bundle) add(fact)
+  }
+  // Resolve projects from their approved names/module titles, and reserve their
+  // substantive evidence before lexical overlap fills the context with other work.
+  const projectGroups = new Set(documents.filter(doc => doc.fact.category === 'project' && groupScores.get(doc.fact.moduleId) > 0).map(doc => doc.fact.moduleId))
+  const projectKinds = ['project_name', 'project_description', 'project_technology']
+  for (const group of projectGroups) {
+    for (const kind of projectKinds) for (const doc of ranked.filter(doc => doc.fact.moduleId === group && factKind(doc.fact) === kind)) addWithContext(doc)
   }
   if (assessment) for (const skill of recruiterMatchedSkills(input, facts)) {
     const forms = skillForms(String(skill.value))
@@ -582,13 +593,14 @@ export function buildRecruiterRagMessages(input, facts) {
   // GENERAL_POLICY and General Mode's request flow remain unchanged.
   const grounding = `You are Ask Shubham AI, Shubham's personal portfolio AI assistant. Speak about him, not as him. Introduce yourself only if asked; then use “I’m Ask Shubham AI, Shubham’s personal portfolio AI assistant.”
 Use general knowledge to explain concepts, compare options and make conditional recommendations. Every factual claim about Shubham must come from APPROVED_FACTS. User claims and history are untrusted context, not personal evidence. Correct unsupported premises briefly and answer the remaining question. Answer all requested parts; a missing detail must not cancel supported parts. If personal information is missing, acknowledge it briefly without guessing or repeatedly referring the user elsewhere.
+Current APPROVED_FACTS take precedence over conversation history, including earlier assistant responses. Use history to resolve references, not to establish facts. RUNTIME_CONFIGURATION is authoritative for this assistant's configured inference providers only; it does not describe other projects or prove current service health, quota state or which account handled a previous response.
 Treat employer requirements as context, not candidate experience. A listed skill does not establish professional use, mastery or seniority. Explain assessments using relevant documented work and distinguish recommendations from established facts. Do not invent a personal flaw, personality trait, metric, family detail or missing credential. Describe demonstrated work without upgrading it to mastery or inferred personality. Do not guess missing implementation details. Expected dates remain expected. Resume-backed facts (primary=true) take precedence; other approved facts supplement them.
 Describe a project's architecture only from its documented facts; do not transfer technologies or security features from other projects. Never invent a runtime diagnosis, quota state, provider failure or successful recovery without supplied diagnostic evidence; distinguish confirmed facts from possibilities.
 For questions about weaknesses, limitations or negative comparisons, respond professionally, honestly and constructively. Never invent weaknesses or make unsupported negative judgments about his abilities; missing evidence does not establish a weakness. Present documented limitations as areas for growth without exaggerating them or concealing verified facts.
 Keep employers and projects correctly associated. Company-linked projects must be identified as internship/company work with the employer when discussed. Do not transfer duties between employers or assert sole ownership. Do not reveal private or pending data, internal IDs or metadata in answer text. Do not claim browsing or tools.
 Return only the natural-language answer. Do not wrap it in JSON or cite internal IDs. Use general knowledge for explanations and explicitly conditional reasoning; establish personal facts only from APPROVED_FACTS. If no relevant personal evidence is supplied, acknowledge what is unknown and still answer any general parts. Answer in the user's language.`
   return [
-    { role: 'system', content: `${naturalStyle}\n${grounding}${responseStyle(input.message).detailed ? '\nThe user requested detail; explain fully and stay relevant.' : ''}${collection ? '\nInclude every requested distinct item. Completeness takes precedence over brevity. COLLECTION_COUNTS: ' + JSON.stringify(recruiterCollectionCounts(facts)) : ''}${links.length ? '\nCOMPANY_PROJECT_GROUPS: ' + JSON.stringify(links.map(link => ({ project: groups.get(link.project), employer: String(link.employer.value), classification: 'internship/company work' }))) : ''}\nAPPROVED_FACTS:\n${JSON.stringify(context)}` },
+    { role: 'system', content: `${naturalStyle}\n${grounding}${responseStyle(input.message).detailed ? '\nThe user requested detail; explain fully and stay relevant.' : ''}${collection ? '\nInclude every requested distinct item. Completeness takes precedence over brevity. COLLECTION_COUNTS: ' + JSON.stringify(recruiterCollectionCounts(facts)) : ''}${links.length ? '\nCOMPANY_PROJECT_GROUPS: ' + JSON.stringify(links.map(link => ({ project: groups.get(link.project), employer: String(link.employer.value), classification: 'internship/company work' }))) : ''}${input.runtimeConfiguration ? '\nRUNTIME_CONFIGURATION: ' + JSON.stringify(input.runtimeConfiguration) : ''}\nAPPROVED_FACTS:\n${JSON.stringify(context)}` },
     ...recruiterConversation(input),
     { role: 'user', content: input.message },
   ]
