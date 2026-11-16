@@ -3,8 +3,8 @@ import { conciseSentences, hasInternalMetadata, joinList, responseStyle } from '
 import { educationKind, eligibleEducationFacts, resolveEducationRequest } from './educationRetrieval.js'
 import { normalizeRecruiterQuestion, isRecruiterFollowup, hasExplicitRecruiterEntity } from './recruiterQuery.js'
 
-export const PERSONAL_FALLBACK = 'I don’t have that detail. You can ask Shubham directly.'
-export const SCHOOLING_FALLBACK = 'I don’t have Shubham’s schooling details to share. You can ask him directly.'
+export const PERSONAL_FALLBACK = 'I don’t have that detail to share here.'
+export const SCHOOLING_FALLBACK = 'My schooling details aren’t included here.'
 const technologyAlias = value => value.toLowerCase().replace(/\breact(?:\.?js)\b/g, 'react').replace(/\bnodejs\b/g, 'node.js').replace(/\bexpressjs\b/g, 'express.js').replace(/\bvuejs\b/g, 'vue').replace(/tailwind css/g, 'tailwind').replace(/openai codex/g, 'codex')
 const bare = value => String(value).replace(/[.!?]+$/, '').trim()
 const sentence = value => bare(value) + '.'
@@ -92,7 +92,7 @@ export function composeRecruiterSkills(question, facts) {
   return {
     text: request.complete
       ? chosen.map(group => `${group.label}: ${joinList(group.facts.map(fact => String(fact.value)))}.`).join('\n')
-      : `Shubham’s skills include ${joinList(chosen.flatMap(group => group.facts.map(fact => String(fact.value))))}.`,
+      : `My skills include ${joinList(chosen.flatMap(group => group.facts.map(fact => String(fact.value))))}.`,
     knowledgeIds: chosen.flatMap(group => group.facts.map(fact => fact.id)),
   }
 }
@@ -171,7 +171,7 @@ export function composeRecruiterTimeline(question, facts) {
 export function composeRecruiterAnswer(question, { facts = [], selectedIds, history = [], today } = {}) {
   const context = resolveRecruiterContext(question, history)
   question = context.message
-  if (/^(hi|hello|hey)[!.?\s]*$/i.test(question.trim())) return { text: 'Hi! What would you like to know about Shubham’s work?', knowledgeIds: [] }
+  if (/^(hi|hello|hey)[!.?\s]*$/i.test(question.trim())) return { text: 'Hi! What would you like to know about my work?', knowledgeIds: [] }
   if (/^(thanks|thank you)[!.?\s]*$/i.test(question.trim())) return { text: 'You’re welcome.', knowledgeIds: [] }
   if (/^(who are you|what can you do)[?.!\s]*$/i.test(question.trim())) return { text: 'I’m Ask Shubham AI. I can help with questions about Shubham’s professional background.', knowledgeIds: [] }
   const eligible = facts.filter(fact => isEligibleFact(fact, { today }))
@@ -186,7 +186,7 @@ export function composeRecruiterAnswer(question, { facts = [], selectedIds, hist
   const kind = (items, name) => items.find(fact => factKind(fact) === name)
   const choose = (items, name) => items.filter(fact => factKind(fact) === name)
   const nameFact = get('profile-name')
-  const subject = () => nameFact ? String(use(nameFact)).split(' ')[0] : 'The developer'
+  const subject = (pronoun = 'I') => { if (nameFact) use(nameFact); return pronoun }
   const style = responseStyle(question)
   const sameCategory = selected.filter(fact => fact.category === intent)
   const sentences = []
@@ -204,14 +204,14 @@ export function composeRecruiterAnswer(question, { facts = [], selectedIds, hist
       const start = String(use(get('availability-start-date')))
       const hiring = requested.includes('availability-hiring') && ids.has('availability-hiring') ? use(get('availability-hiring')) : null
       const scope = hiring ? ' for ' + String(hiring).replace(/^Available for\s+/i, '') : ''
-      sentences.push(/\bimmediate(?:ly)?\b/i.test(start) ? `${subject()} is available to join immediately${scope}.` : `${subject()}'s stated start availability is ${bare(start)}.`)
-    } else if (ids.has('availability-hiring') && requested.includes('availability-hiring')) sentences.push(`${subject()} is ${String(use(get('availability-hiring'))).replace(/^Available/, 'available')}.`)
+      sentences.push(/\bimmediate(?:ly)?\b/i.test(start) ? `${subject('I’m')} available to join immediately${scope}.` : `${subject('My')} start availability is ${bare(start)}.`)
+    } else if (ids.has('availability-hiring') && requested.includes('availability-hiring')) sentences.push(`${subject('I’m')} ${String(use(get('availability-hiring'))).replace(/^Available/, 'available')}.`)
     if (requested.includes('availability-arrangement') && ids.has('availability-arrangement')) {
       const arrangement = String(use(get('availability-arrangement'))).toLowerCase()
       const modes = ['onsite', 'hybrid', 'remote'].filter(mode => new RegExp(mode === 'onsite' ? 'on.?site' : mode, 'i').test(question) && arrangement.includes(mode))
-      sentences.push(`${subject()} is open to ${modes.length ? joinList(modes) : arrangement} opportunities.`)
+      sentences.push(`${subject('I’m')} open to ${modes.length ? joinList(modes) : arrangement} opportunities.`)
     }
-    if (requested.includes('availability-relocation') && ids.has('availability-relocation')) sentences.push(`${subject()} is ${String(use(get('availability-relocation'))).replace(/^Open/, 'open')}.`)
+    if (requested.includes('availability-relocation') && ids.has('availability-relocation')) sentences.push(`${subject('I’m')} ${String(use(get('availability-relocation'))).replace(/^Open/, 'open')}.`)
   } else if (intent === 'skills') {
     return composeRecruiterSkills(question, sameCategory)
   } else if (intent === 'education') {
@@ -219,10 +219,10 @@ export function composeRecruiterAnswer(question, { facts = [], selectedIds, hist
     const degree = kind(educationFacts, 'degree')
     const university = kind(educationFacts, 'university')
     const period = kind(educationFacts, 'study_period')
-    if (degree && university) sentences.push(`${subject()}'s ${use(degree)} programme is at ${use(university)}.`)
-    else if (degree) sentences.push(`${subject()}'s degree is listed as ${use(degree)}.`)
-    else if (university) sentences.push(`${subject()}'s university is ${use(university)}.`)
-    if (period) sentences.push(`The study period is ${use(period)}.`)
+    if (degree && university) sentences.push(`${subject('My')} ${use(degree)} programme is at ${use(university)}.`)
+    else if (degree) sentences.push(`${subject('My')} degree is listed as ${use(degree)}.`)
+    else if (university) sentences.push(`${subject('My')} university is ${use(university)}.`)
+    if (period) sentences.push(`My study period is ${use(period)}.`)
     const school = kind(educationFacts, 'school_name')
     const board = kind(educationFacts, 'school_board')
     const class10 = kind(educationFacts, 'school_class_10_score')
@@ -230,10 +230,10 @@ export function composeRecruiterAnswer(question, { facts = [], selectedIds, hist
     const stream = kind(educationFacts, 'school_class_12_stream')
     if (school) sentences.push(`${subject()} attended ${use(school)}${board ? ' under the ' + use(board) : ''}.`)
     else if (board) sentences.push(`The school board was ${use(board)}.`)
-    if (class10 && class12) sentences.push(`The scores were ${use(class10)}% in Class 10 and ${use(class12)}% in Class 12${stream ? ' (' + use(stream) + ')' : ''}.`)
-    else if (class10) sentences.push(`The Class 10 score was ${use(class10)}%.`)
-    else if (class12) sentences.push(`The Class 12 score was ${use(class12)}%${stream ? ' (' + use(stream) + ')' : ''}.`)
-    else if (stream) sentences.push(`The Class 12 stream was ${use(stream)}.`)
+    if (class10 && class12) sentences.push(`My scores were ${use(class10)}% in Class 10 and ${use(class12)}% in Class 12${stream ? ' (' + use(stream) + ')' : ''}.`)
+    else if (class10) sentences.push(`My Class 10 score was ${use(class10)}%.`)
+    else if (class12) sentences.push(`My Class 12 score was ${use(class12)}%${stream ? ' (' + use(stream) + ')' : ''}.`)
+    else if (stream) sentences.push(`My Class 12 stream was ${use(stream)}.`)
   } else if (intent === 'experience') {
     const groups = [...new Set(sameCategory.map(fact => fact.moduleId))]
     const filtered = groups.filter(group => /indux/i.test(query) ? group === 'experience-1' : /entrepreneurship|\bten\b/i.test(query) ? group === 'experience-2' : true)
@@ -246,7 +246,7 @@ export function composeRecruiterAnswer(question, { facts = [], selectedIds, hist
       const location = kind(selectedGroup, 'role_location')
       const locationOnly = /where|location/i.test(question)
       if (locationOnly) {
-        if (employer && location) sentences.push(`The role at ${use(employer)} was in ${use(location)}.`)
+        if (employer && location) sentences.push(`My role at ${use(employer)} was in ${use(location)}.`)
         continue
       }
       if (/tech|stack|tools/.test(question)) {
@@ -256,12 +256,12 @@ export function composeRecruiterAnswer(question, { facts = [], selectedIds, hist
       }
       if (role && employer) {
         const period = dates ? ' from ' + String(use(dates)).replace(/\s*[-–]\s*/, ' to ') : ''
-        sentences.push(sentences.length ? `The experience also includes a ${use(role)} role at ${use(employer)}${period}.` : `${subject()} worked as a ${use(role)} at ${use(employer)}${period}.`)
+        sentences.push(`${subject()} worked as a ${use(role)} at ${use(employer)}${period}.`)
       }
       const contributions = /\bwhen\b|dates|period|how long/i.test(question) ? [] : choose(selectedGroup, 'contribution').slice(0, style.detailed ? 4 : filtered.length > 1 ? 0 : 1)
       for (const contribution of contributions) {
         const value = String(use(contribution))
-        sentences.push(sentence(sentences.length ? `The work involved ${activity(value)}` : `${subject()} ${lowerVerb(value)}`))
+        sentences.push(sentence(sentences.length ? `My work involved ${activity(value)}` : `${subject()} ${lowerVerb(value)}`))
       }
     }
   } else if (intent === 'project') {
@@ -296,20 +296,20 @@ export function composeRecruiterAnswer(question, { facts = [], selectedIds, hist
         else if (group === 'project-3' && projectName) sentences.push(sentence(`The ${use(projectName)} includes ${value[0].toLowerCase() + bare(value).slice(1)}`))
         else if (group === 'project-eventverse' && projectName) sentences.push(sentence(`${use(projectName)} is an ${value[0].toLowerCase() + bare(value).slice(1)}`))
         else sentences.push(sentence(`The work involves a ${value[0].toLowerCase() + bare(value).slice(1)}`))
-      } else if (projectName && !technologiesOnly) sentences.push(`${subject()} has worked on ${use(projectName)}.`)
+      } else if (projectName && !technologiesOnly) sentences.push(`${subject()} have worked on ${use(projectName)}.`)
       if (/tech|stack|built with|use|detail/i.test(question)) {
         const technologies = choose(selectedGroup, 'project_technology').slice(0, style.detailed ? 12 : 6)
         if (technologies.length) sentences.push(`The technologies include ${joinList(technologies.map(use))}.`)
       }
     }
-    if (items.length) sentences.push(`${subject()} has worked on ${joinList(items)}.`)
+    if (items.length) sentences.push(`${subject()} have worked on ${joinList(items)}.`)
   } else if (intent === 'achievements') {
     const certificationQuestion = /certif/i.test(question)
     const items = sameCategory.filter(fact => factKind(fact) === (certificationQuestion ? 'certification' : 'award')).slice(0, style.detailed ? 12 : 4)
-    if (items.length) sentences.push(certificationQuestion ? `${subject()}'s certifications include ${joinList(items.map(use))}.` : `${subject()} received ${joinList(items.map(use))}.`)
+    if (items.length) sentences.push(certificationQuestion ? `${subject('My')} certifications include ${joinList(items.map(use))}.` : `${subject()} received ${joinList(items.map(use))}.`)
     if (!certificationQuestion && !/award|hackathon/.test(question)) {
       const ranks = kind(sameCategory, 'school_rank')
-      if (ranks) sentences.push(`The school rankings were ${use(ranks)}.`)
+      if (ranks) sentences.push(`My school rankings were ${use(ranks)}.`)
     }
   } else if (intent === 'links') {
     const email = kind(sameCategory, 'email')
@@ -317,23 +317,23 @@ export function composeRecruiterAnswer(question, { facts = [], selectedIds, hist
     const linkedin = kind(sameCategory, 'linkedin')
     const resume = kind(sameCategory, 'resume')
     const onlyProfile = /github|linkedin/i.test(question)
-    if (email && !onlyProfile && !/résumé|resume|\bcv\b/i.test(question)) sentences.push(`You can email ${subject()} at ${use(email)}.`)
-    if (/résumé|resume|\bcv\b/i.test(question)) sentences.push(resume ? `You can view ${subject()}'s résumé at ${use(resume)}.` : 'I don’t have a current résumé link to share.')
-    if (github && /github/i.test(question)) sentences.push(`The GitHub profile is ${use(github)}.`)
-    if (linkedin && /linkedin/i.test(question)) sentences.push(`The LinkedIn profile is ${use(linkedin)}.`)
+    if (email && !onlyProfile && !/résumé|resume|\bcv\b/i.test(question)) sentences.push(`You can email ${subject('me')} at ${use(email)}.`)
+    if (/résumé|resume|\bcv\b/i.test(question)) sentences.push(resume ? `You can view ${subject('my')} résumé at ${use(resume)}.` : 'I don’t have a current résumé link to share.')
+    if (github && /github/i.test(question)) sentences.push(`My GitHub profile is ${use(github)}.`)
+    if (linkedin && /linkedin/i.test(question)) sentences.push(`My LinkedIn profile is ${use(linkedin)}.`)
   } else if (intent === 'career') {
     const requested = /target role|roles.*target/.test(question) ? 'target_role' : /career goal/.test(question) ? 'career_goal' : 'opportunity'
     const items = sameCategory.filter(fact => factKind(fact) === requested)
     if (requested === 'career_goal') for (const fact of items) sentences.push(sentence(use(fact)))
-    else if (items.length) sentences.push(`${subject()} is ${requested === 'target_role' ? 'targeting' : 'open to'} ${joinList(items.map(fact => bare(String(use(fact))).toLowerCase()))}.`)
+    else if (items.length) sentences.push(`${subject('I’m')} ${requested === 'target_role' ? 'targeting' : 'open to'} ${joinList(items.map(fact => bare(String(use(fact))).toLowerCase()))}.`)
   } else if (intent === 'location') {
     const location = selected.find(fact => fact.id === 'profile-location')
-    if (location) sentences.push(`${subject()} is based in ${use(location)}.`)
+    if (location) sentences.push(`${subject('I’m')} based in ${use(location)}.`)
   } else if (intent === 'profile') {
     const fullName = kind(selected, 'name')
     const profession = kind(selected, 'profession')
-    if (profession) sentences.push(`${fullName ? use(fullName) : subject()} is a ${String(use(profession)).toLowerCase()}.`)
-    else if (fullName) sentences.push(`The name is ${use(fullName)}.`)
+    if (profession) sentences.push(fullName ? `I’m ${use(fullName)}, a ${String(use(profession)).toLowerCase()}.` : `${subject('I’m')} a ${String(use(profession)).toLowerCase()}.`)
+    else if (fullName) sentences.push(`My name is ${use(fullName)}.`)
   }
   const text = conciseSentences(sentences, question)
   if (!text || hasInternalMetadata(text)) return { text: fallback, knowledgeIds: [] }

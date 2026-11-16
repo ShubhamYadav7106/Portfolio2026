@@ -11,6 +11,7 @@ import ModeSelector from './ModeSelector.vue'
 const { activeMode, messages, isLoading, isWaitingForResponse, error, notice, canRetry, hasHistory, setMode, send, retry, stop, clear } = useChat(respondToChat)
 const mode = computed(() => MODES[activeMode.value])
 const isOpen = ref(false)
+const isMorphing = ref(false)
 const isMobile = ref(false)
 const drafts = ref({ recruiter: '', general: '' })
 const draft = computed({ get: () => drafts.value[activeMode.value], set: value => { drafts.value[activeMode.value] = value } })
@@ -99,6 +100,61 @@ function chooseSuggestion(item) {
 }
 let mobileQuery
 let releaseMobileLock
+let panelMotion
+let interruptedPanelFrame
+const panelFrame = (rect, radius) => ({ left: `${rect.left}px`, top: `${rect.top}px`, right: 'auto', bottom: 'auto', width: `${rect.width}px`, height: `${rect.height}px`, maxWidth: 'none', borderRadius: radius })
+
+function cancelPanelMotion(element) {
+  const motion = panelMotion
+  if (element && motion?.element === element) interruptedPanelFrame = panelFrame(element.getBoundingClientRect(), getComputedStyle(element).borderRadius)
+  panelMotion = undefined
+  motion?.animations.forEach(animation => animation.cancel())
+  motion?.element.classList.remove('chat-panel--morphing')
+  isMorphing.value = false
+}
+
+// Animate the surface's actual bounds, keeping the type and icons undistorted.
+// The launcher remains measurable while hidden, including on mobile and close.
+function morphPanel(element, done, opening) {
+  const interrupted = interruptedPanelFrame
+  interruptedPanelFrame = undefined
+  cancelPanelMotion()
+  element.inert = !opening
+  if (opening) element.removeAttribute('aria-hidden')
+  else element.setAttribute('aria-hidden', 'true')
+  const origin = launcher.value?.getBoundingClientRect()
+  if (!origin?.width || !element.animate || window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    done()
+    return
+  }
+  const destination = element.getBoundingClientRect()
+  const collapsed = panelFrame(origin, getComputedStyle(launcher.value).borderRadius)
+  const expanded = panelFrame(destination, getComputedStyle(element).borderRadius)
+  isMorphing.value = true
+  element.classList.add('chat-panel--morphing')
+  const surface = element.animate([interrupted || (opening ? collapsed : expanded), opening ? expanded : collapsed], {
+    duration: opening ? 480 : 340,
+    easing: opening ? 'cubic-bezier(.22, 1, .36, 1)' : 'cubic-bezier(.4, 0, .2, 1)',
+    fill: 'both',
+  })
+  const content = [...element.querySelectorAll('.header-identity, .header-actions, .mode-selector, .chat-transcript, .chat-footer')]
+  const animations = [surface, ...content.map((child, index) => child.animate(opening ? [
+    { opacity: 0, transform: 'translateY(8px)' }, { opacity: 1, transform: 'translateY(0)' },
+  ] : [
+    { opacity: 1, transform: 'translateY(0)' }, { opacity: 0, transform: 'translateY(4px)' },
+  ], { duration: opening ? 240 : 100, delay: opening ? 160 + index * 35 : (content.length - 1 - index) * 16, easing: 'cubic-bezier(.22, 1, .36, 1)', fill: 'both' }))]
+  const motion = { element, animations }
+  panelMotion = motion
+  void Promise.allSettled(animations.map(animation => animation.finished)).then(() => {
+    if (panelMotion !== motion) return
+    cancelPanelMotion()
+    done()
+    if (!opening) void nextTick(() => launcher.value?.focus({ preventScroll: true }))
+  })
+}
+
+const enterPanel = (element, done) => morphPanel(element, done, true)
+const leavePanel = (element, done) => morphPanel(element, done, false)
 
 function updateViewport() {
   const visible = window.visualViewport
@@ -138,11 +194,12 @@ async function open() {
   else composer.value?.focus({ preventScroll: true })
   scrollToLatest()
 }
+defineExpose({ open })
 
 async function close() {
   isOpen.value = false
   await nextTick()
-  launcher.value?.focus({ preventScroll: true })
+  if (!isMorphing.value) launcher.value?.focus({ preventScroll: true })
 }
 
 function resizeComposer() {
@@ -247,6 +304,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  cancelPanelMotion()
   releaseMobileLock?.()
   mobileQuery?.removeEventListener('change', updateMobile)
   document.removeEventListener('keydown', onDocumentKeydown)
@@ -263,13 +321,15 @@ onBeforeUnmount(() => {
         <div v-if="isOpen && isMobile" class="chat-backdrop" aria-hidden="true" @click="close" />
       </Transition>
 
-      <Transition name="ask-panel">
+      <Transition :css="false" @enter="enterPanel" @leave="leavePanel" @enter-cancelled="cancelPanelMotion" @leave-cancelled="cancelPanelMotion">
         <section
           v-if="isOpen"
           id="ask-shubham-panel"
           ref="panel"
           class="chat-panel"
           role="dialog"
+          :aria-hidden="!isOpen ? 'true' : undefined"
+          :inert="!isOpen || undefined"
           :aria-modal="isMobile ? 'true' : undefined"
           aria-labelledby="ask-shubham-title"
           :aria-describedby="isMockDevelopment ? 'ask-preview-description' : undefined"
@@ -359,14 +419,12 @@ onBeforeUnmount(() => {
         </section>
       </Transition>
 
-      <Transition name="ask-launcher">
-        <button v-show="!isOpen" ref="launcher" class="chat-launcher" aria-label="Open Ask Shubham AI" aria-haspopup="dialog" aria-controls="ask-shubham-panel" :aria-expanded="isOpen" @click="open">
-          <span class="launcher-border-light" aria-hidden="true" />
-          <span class="launcher-mark"><AssistantMark /></span>
-          <span class="launcher-copy"><small>A conversation about my work</small><span>Ask Shubham AI</span></span>
-          <ChevronRightIcon class="launcher-arrow" aria-hidden="true" />
-        </button>
-      </Transition>
+      <button ref="launcher" class="chat-launcher" :class="{ 'chat-launcher--hidden': isOpen || isMorphing }" :aria-hidden="isOpen || isMorphing ? 'true' : undefined" :tabindex="isOpen || isMorphing ? -1 : undefined" :inert="isOpen || isMorphing || undefined" aria-label="Open Ask Shubham AI" aria-haspopup="dialog" aria-controls="ask-shubham-panel" :aria-expanded="isOpen" @click="open">
+        <span class="launcher-border-light" aria-hidden="true" />
+        <span class="launcher-mark"><AssistantMark /></span>
+        <span class="launcher-copy"><small>A conversation about my work</small><span>Ask Shubham AI</span></span>
+        <ChevronRightIcon class="launcher-arrow" aria-hidden="true" />
+      </button>
     </div>
   </Teleport>
 </template>
@@ -418,6 +476,7 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid var(--ask-acce
   text-align: left; transition: background .16s ease, border-color .16s ease;
 }
 .chat-launcher:hover { background: var(--ask-soft); border-color: var(--ask-muted); }
+.chat-launcher--hidden { opacity: 0; visibility: hidden; pointer-events: none; }
 .launcher-border-light { display: none; }
 @supports (mask-composite: exclude) or (-webkit-mask-composite: xor) {
   .launcher-border-light {
@@ -475,6 +534,7 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid var(--ask-acce
   isolation: isolate; transform-origin: bottom right;
 }
 .chat-panel:focus { outline: none; }
+.chat-panel--morphing { will-change: width, height, top, left; }
 .chat-panel, .chat-panel * { box-sizing: border-box; }
 .chat-panel { max-width: calc(100vw - 32px); }
 .header-identity { flex: 1; }
@@ -539,17 +599,36 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid var(--ask-acce
 .composer-meta p { margin: 0; }
 .session-note { white-space: nowrap; }
 .chat-backdrop { position: fixed; z-index: 35; inset: 0; background: #0b100e80; }
-.ask-panel-enter-active, .ask-panel-leave-active { transition: opacity .2s ease, transform .2s ease; }
-.ask-panel-enter-from, .ask-panel-leave-to { opacity: 0; transform: translateY(8px); }
-.ask-launcher-enter-active, .ask-launcher-leave-active, .ask-backdrop-enter-active, .ask-backdrop-leave-active { transition: opacity .16s ease; }
-.ask-launcher-enter-from, .ask-launcher-leave-to, .ask-backdrop-enter-from, .ask-backdrop-leave-to { opacity: 0; }
+.ask-backdrop-enter-active, .ask-backdrop-leave-active { transition: opacity .24s ease; }
+.ask-backdrop-enter-from, .ask-backdrop-leave-to { opacity: 0; }
 @keyframes ask-thinking { 0%, 60%, 100% { opacity: .35; } 30% { opacity: 1; } }
 @keyframes ask-answer-in { from { opacity: .7; } to { opacity: 1; } }
 /* Keep clear of the portfolio's vertical location label. */
 @media (min-width: 768px) { .ask-shubham { --ask-panel-right: 88px; } }
 @media (max-width: 639px) {
   .ask-shubham { --ask-panel-right: 16px; }
-  .chat-launcher { bottom: max(16px, calc(env(safe-area-inset-bottom) + 12px)); }
+  .chat-launcher {
+    right: calc(16px + env(safe-area-inset-right, 0px));
+    bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+    box-sizing: border-box;
+    min-height: 48px;
+    gap: 8px; padding: 6px 12px 6px 8px;
+    border-radius: 12px;
+    box-shadow: 0 4px 12px #0000000f;
+  }
+  .chat-launcher:active { background: var(--ask-soft); }
+  .chat-launcher .launcher-border-light,
+  .chat-launcher .launcher-copy small,
+  .chat-launcher .launcher-arrow { display: none; }
+  .chat-launcher .launcher-mark {
+    width: 32px; height: 32px; padding: 0;
+    border: 0; border-radius: 4px;
+    background: var(--ask-soft);
+  }
+  .chat-launcher .launcher-mark .assistant-mark { width: 32px; height: 32px; }
+  .chat-launcher .launcher-copy { gap: 0; }
+  .chat-launcher .launcher-copy > span { font-size: 13px; font-weight: 500; line-height: 20px; white-space: nowrap; }
+  :global(html.dark .ask-shubham .chat-launcher) { box-shadow: none; }
   .chat-panel { --mobile-top-gap: max(8px, env(safe-area-inset-top)); --mobile-bottom-gap: max(8px, var(--ask-mobile-bottom-inset, env(safe-area-inset-bottom))); top: calc(var(--ask-viewport-top, 0px) + var(--mobile-top-gap)); right: max(8px, env(safe-area-inset-right)); left: max(8px, env(safe-area-inset-left)); bottom: auto; width: auto; max-width: none; height: max(0px, calc(var(--ask-viewport-height, 100dvh) - var(--mobile-top-gap) - var(--mobile-bottom-gap))); border-radius: 16px; transform-origin: bottom center; }
   .chat-header { padding: 12px 14px 8px; }
   .followup-questions { grid-template-columns: repeat(2, minmax(0, 1fr)); }

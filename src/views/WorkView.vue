@@ -9,11 +9,13 @@
             <WorkUnit
                 v-for="(project, index) in projInitial"
                 :key="index" :project="project"
+                @open-assistant="$emit('open-assistant')"
             />
             <WorkUnit
                 v-if="showMore"
-                v-for="(project, index) in content"
+                v-for="(project, index) in remainingProjects"
                 :key="index" :project="project"
+                @open-assistant="$emit('open-assistant')"
             />
 
             <button v-show="showPreview" @click="toggleShowMore" class="w-52 py-2 px-6 mx-auto mt-10 bg-transparent border border-button-color text-button-color shadow-sm shadow-button-color transition ease-in-out hover:bg-button-color hover:text-white focus:bg-button-color focus:text-white active:bg-button-color active:text-white duration-300">
@@ -35,10 +37,12 @@ const props = defineProps({
     content: Object,
     transitions: Object
 })
+defineEmits(['open-assistant'])
 
 const showPreview = props.content.length > 3
 const showMore = ref(false)
-const projInitial = showPreview ? props.content.splice(0, 3) : props.content
+const projInitial = showPreview ? props.content.slice(0, 3) : props.content
+const remainingProjects = props.content.slice(3)
 
 const workSection = ref({})
 const visible = props.transitions.active && window.matchMedia('(prefers-reduced-motion: no-preference)').matches ? onIntersect(workSection, !!props.transitions.showOnce, { threshold: props.transitions.thresholdOption }) : true

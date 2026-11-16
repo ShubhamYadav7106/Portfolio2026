@@ -103,7 +103,7 @@ export function createApp({ config, groqRecruiter, groqGeneral, groqFallback, kn
       if (req.get('accept')?.includes('application/x-ndjson')) await send({ type: 'pending', mode: input.mode, timeoutMs: config.timeoutMs })
       controller.signal.throwIfAborted()
       const messages = buildMessages(input)
-      const options = providerRequest({ model: config.model, messages, maxTokens: completionBudget(input.mode, input.message, config.maxCompletionTokens) })
+      const options = providerRequest({ model: config.model, messages, input, maxTokens: completionBudget(input.mode, input.message, config.maxCompletionTokens) })
       const stream = await groqGeneral.chat.completions.create(options, { signal: providerController.signal })
       await send({ type: 'start', provider: 'groq', mode: input.mode, model: config.model })
       const conversation = new ConversationStream(input.message)

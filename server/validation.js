@@ -1,4 +1,5 @@
 import { PublicError } from './errors.js'
+import { canonicalTimeZone } from './providerRequest.js'
 
 const fail = () => { throw new PublicError(400, 'INVALID_INPUT', 'Send a valid mode, message, and bounded conversation history.') }
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -8,7 +9,9 @@ export const MAX_HISTORY_LENGTH = 16
 export const MAX_HISTORY_CHARS = 16000
 
 export function validateChatInput(body) {
-  if (!object(body) || !onlyKeys(body, ['mode', 'message', 'history']) || !['recruiter', 'general'].includes(body.mode)) fail()
+  if (!object(body) || !onlyKeys(body, ['mode', 'message', 'history', 'timeZone']) || !['recruiter', 'general'].includes(body.mode)) fail()
+  const timeZone = body.timeZone === undefined ? undefined : canonicalTimeZone(body.timeZone)
+  if (body.timeZone !== undefined && (!timeZone || !body.timeZone.includes('/') && !['UTC', 'GMT'].includes(body.timeZone))) fail()
   if (typeof body.message !== 'string' || !body.message.trim() || body.message.length > MAX_MESSAGE_LENGTH) fail()
   if (!Array.isArray(body.history) || body.history.length > MAX_HISTORY_LENGTH) fail()
   let characters = 0
@@ -19,5 +22,5 @@ export function validateChatInput(body) {
     return { role: item.role, content: item.text }
   })
   if (characters > MAX_HISTORY_CHARS) fail()
-  return { mode: body.mode, message: body.message.trim(), history }
+  return { mode: body.mode, message: body.message.trim(), history, ...(timeZone ? { timeZone } : {}) }
 }

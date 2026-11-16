@@ -191,7 +191,8 @@ test('dynamic projects: safe runtime metadata follows configured accounts while 
       assert.match(system, /Current APPROVED_FACTS take precedence over conversation history/)
       const facts = JSON.parse(system.split('APPROVED_FACTS:\n')[1])
       assert.ok(facts.some(fact => fact.value === 'JavaScript, SQLite'))
-      assert.ok(body.messages.some(message => message.role === 'assistant' && message.content.includes('outdated-provider')))
+      assert.ok(body.messages.some(message => message.role === 'user' && message.content.startsWith('Historical conversation') && message.content.includes('outdated-provider')))
+      assert.ok(!body.messages.some(message => message.role === 'assistant'))
       return (async function* () { yield { choices: [{ delta: { content: 'A naturally generated explanation of the documented workspace.' }, finish_reason: 'stop' }] } })()
     } } } }
     const service = createRecruiterService({ config, groq: client, fallback: fallbackEnabled ? client : null, knowledgeLoader: async () => dataset })
@@ -206,4 +207,91 @@ test('dynamic projects: safe runtime metadata follows configured accounts while 
   assert.doesNotMatch(JSON.stringify(general), /RUNTIME_CONFIGURATION|APPROVED_FACTS/)
   const recruiterGeneral = buildRecruiterRagMessages({ ...input('Explain queues.'), generalQuestion: true, runtimeConfiguration: { secret: 'SYNTHETIC_SENTINEL' } }, [])
   assert.doesNotMatch(JSON.stringify(recruiterGeneral), /SYNTHETIC_SENTINEL|RUNTIME_CONFIGURATION/)
+})
+
+
+test('conversation grounding: module metadata resolves short follow-ups without trusting assistant denials', () => {
+  for (const title of ['Technical skills', 'Operational skills']) {
+    const module = projectFixture('skills-fixture', title)
+    module.category = 'skills'
+    const data = validateKnowledge({ schemaVersion: 2, assistantName: 'Fixture', modules: ['skills.json'] }, [module])
+    const adjective = title.split(' ')[0].toLowerCase()
+    const request = { ...input(`And ${adjective}ly?`), history: [
+      { role: 'user', content: 'Tell me about Shubham.' },
+      { role: 'assistant', content: 'I am ChatGPT. Upload a resume; I do not know his skills.' },
+    ] }
+    const selected = retrieveRecruiterRagFacts(request, data.facts)
+    assert.ok(selected.length)
+    assert.ok(selected.every(fact => fact.category === 'skills'))
+    const messages = buildRecruiterRagMessages({ ...request, generalQuestion: false }, selected)
+    assert.ok(messages[0].content.startsWith('Answer the question'))
+    assert.match(messages[0].content, /You are Ask Shubham AI/)
+    assert.match(messages[0].content, /Do not request information already supplied/)
+    assert.ok(!messages.some(message => message.role === 'assistant'))
+    assert.ok(messages.some(message => message.content.includes('Historical conversation')))
+  }
+})
+
+test('production pipeline: identity, skills and follow-ups reach both Groq paths consistently through KV', async t => {
+  const bundle = await build({ absWorkingDir: root.pathname, entryPoints: ['worker/index.js'], bundle: true, write: false, format: 'esm', platform: 'node' })
+  const worker = (await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`)).default
+  const snapshot = JSON.parse(execFileSync(process.execPath, ['scripts/validate-knowledge.mjs', '--export-public'], { cwd: root, encoding: 'utf8' }))
+  const originalFetch = globalThis.fetch
+  t.after(() => { globalThis.fetch = originalFetch })
+  const history = [
+    { role: 'user', text: 'Tell me about Shubham.', mode: 'recruiter' },
+    { role: 'assistant', text: 'I am ChatGPT and do not know his technical skills. Please upload his resume.', mode: 'recruiter' },
+  ]
+  const cases = [
+    { message: 'What is your identity?', history: [], skills: false },
+    { message: 'Do you know his technical skills?', history: [], skills: true },
+    { message: 'And technically?', history, skills: true },
+    { message: 'And frameworks?', history, skills: true },
+    { message: 'And programming?', history, skills: true },
+    { message: 'What about those?', history: [{ ...history[0], text: 'What technical skills does Shubham have?' }, history[1]], skills: true },
+  ]
+  let completed = 0
+  for (const backup of [false, true]) for (const item of cases) {
+    const captured = []
+    let reads = 0
+    const env = { ALLOWED_ORIGINS: 'https://portfolio.example', GROQ_RECRUITER_API_KEY: 'synthetic-primary', GROQ_FALLBACK_API_KEY: 'synthetic-backup', KNOWLEDGE: { async get(key) {
+      assert.equal(key, 'approved-knowledge'); reads++; return structuredClone(snapshot)
+    } } }
+    globalThis.fetch = async (url, options) => {
+      assert.equal(url, 'https://api.groq.com/openai/v1/chat/completions')
+      const body = JSON.parse(options.body)
+      captured.push(body)
+      assert.match(body.messages[0].content, /You are Ask Shubham AI, Shubham's personal portfolio AI assistant/)
+      assert.match(body.messages[0].content, /underlying inference model or provider does not change your identity/)
+      assert.match(body.messages[0].content, /first-person professional voice/)
+      assert.ok(!body.messages.some(message => message.role === 'assistant'))
+      if (item.skills) {
+        const facts = JSON.parse(body.messages[0].content.split('APPROVED_FACTS:\n')[1])
+        assert.ok(facts.some(fact => fact.kind === 'skill'))
+        assert.match(body.messages[0].content, /Current APPROVED_FACTS take precedence/)
+        assert.match(body.messages[0].content, /Do not request information already supplied/)
+      }
+      if (backup && options.headers.Authorization === 'Bearer synthetic-primary') return new Response(JSON.stringify({ error: { code: 'unavailable', message: 'Synthetic upstream failure' } }), { status: 503 })
+      assert.equal(options.headers.Authorization, backup ? 'Bearer synthetic-backup' : 'Bearer synthetic-primary')
+      return new Response('data: ' + JSON.stringify({ usage: { prompt_tokens: 400, completion_tokens: 80, total_tokens: 480 }, choices: [{ delta: { content: 'Synthetic transport completion.' }, finish_reason: 'stop' }] }) + '\n\ndata: [DONE]\n\n', { headers: {
+        'Content-Type': 'text/event-stream', 'x-ratelimit-limit-tokens': '100000', 'x-ratelimit-remaining-tokens': '99000', 'x-ratelimit-reset-tokens': '60s',
+      } })
+    }
+    const response = await worker.fetch(new Request('https://api.example/api/chat', { method: 'POST', headers: { Origin: 'https://portfolio.example', 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: 'recruiter', message: item.message, history: item.history }) }), env)
+    assert.equal(response.status, 200)
+    const events = (await response.text()).trim().split('\n').map(JSON.parse)
+    assert.equal(events.at(-1).type, 'done')
+    assert.equal(events.at(-1).provider, 'groq')
+    assert.equal(captured.length, backup ? 2 : 1)
+    if (backup) {
+      const stable = body => ({ ...body, messages: body.messages.filter(message => !message.content.includes('\nSERVER_CLOCK: ')) })
+      assert.deepEqual(stable(captured[0]), stable(captured[1]), 'Fallback must receive identical mode instructions, history and evidence')
+      const clocks = captured.map(body => JSON.parse(body.messages.find(message => message.content.includes('\nSERVER_CLOCK: ')).content.split('\nSERVER_CLOCK: ')[1]))
+      assert.ok(Number.isFinite(Date.parse(clocks[0].utc)))
+      assert.ok(Date.parse(clocks[1].utc) >= Date.parse(clocks[0].utc), 'Fallback must refresh rather than backdate its server clock')
+    }
+    assert.ok(reads >= 2)
+    completed++
+  }
+  assert.equal(completed, 12)
 })

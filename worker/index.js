@@ -1,6 +1,7 @@
 import { validateKnowledge, todayUTC, isEligibleFact } from '../knowledge/validation.js'
 import { createRecruiterService } from '../server/recruiter.js'
 import { buildMessages } from '../server/policy.js'
+import { providerRequest } from '../server/providerRequest.js'
 import { validateChatInput } from '../server/validation.js'
 import { ConversationStream, completionBudget } from '../server/responseStream.js'
 import { PublicError, safeError } from '../server/errors.js'
@@ -194,7 +195,7 @@ async function chat(request, env, input, settings, origin) {
     }
     if (!settings.generalApiKey) throw new PublicError(503, 'NOT_CONFIGURED', 'The AI assistant is not configured yet. Please try again later.')
     const messages = buildMessages(input)
-    const stream = await groq.chat.completions.create({ model: settings.model, messages, stream: true, max_completion_tokens: completionBudget(input.mode, input.message, settings.maxCompletionTokens), ...(settings.model.startsWith('openai/gpt-oss-') ? { include_reasoning: false, reasoning_effort: 'low' } : {}) }, { signal: controller.signal })
+    const stream = await groq.chat.completions.create(providerRequest({ model: settings.model, messages, input, maxTokens: completionBudget(input.mode, input.message, settings.maxCompletionTokens) }), { signal: controller.signal })
     return async enqueue => {
       await send(enqueue)
       await enqueue({ type: 'start', provider: 'groq', mode: 'general', model: settings.model })

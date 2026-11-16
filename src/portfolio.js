@@ -42,7 +42,7 @@ const socialMediaLinks = {
 // --- 😎 About Section ---
 const about = {
     autobiography: [
-        "My name is Shubham Yadav, a Computer Science Engineering student and aspiring Full-Stack Developer who enjoys building modern and user-friendly web applications. I have hands-on experience as a Frontend Developer, mainly working with React and TypeScript. During my internships, I worked on real-world projects like InduxCRM, building features such as dashboards, role-based systems, quotations, and invoices. Currently, I’m focused on improving my full-stack skills, especially backend development, APIs, and databases."
+        "I'm a developer who enjoys turning ideas into practical digital solutions. My interests include full-stack development, artificial intelligence, and exploring emerging technologies. I enjoy experimenting with new tools, building meaningful projects, and continuously improving my technical skills through hands-on experience."
     ], // Separated items are paragraphs
     techStack: [
         "JavaScript",
@@ -50,9 +50,11 @@ const about = {
         "React",
         "Node.js",
         "Tailwind",
-        "Git",
+        "REST APIs",
         "GitHub",
-        "Codex"
+        "Codex",
+        "Express.js",
+        "MongoDB"
     ],
     photo1Link: "images/portrait1.jpeg",
     photo2Link: "images/portrait2.jpeg",
@@ -150,6 +152,25 @@ const works = [
         alignLeft: false
     },
     {
+        projectName: "Ask Shubham AI – Intelligent Portfolio Assistant",
+        yearCompleted: "2026",
+        description:
+            "Developed a dual-mode AI portfolio assistant that provides contextual, knowledge-grounded responses about my skills, projects, and professional experience. Implemented LLM integration, verified knowledge retrieval, response streaming, conversation context management, automatic account fallback, and API rate limiting.",
+        techStack:
+            "Vue.js, JavaScript, Tailwind CSS, Groq API, Node.js, Cloudflare Workers, Cloudflare KV, LLM Integration.",
+        links: [
+            {
+                label: "Try Live AI",
+                type: "assistant"
+            }
+        ],
+        imageLinks: [
+            "images/ask-shubham-ai-01.png",
+            "images/ask-shubham-ai-interface.png"
+        ],
+        alignLeft: true
+    },
+    {
        projectName: "Neuro TEN",
   yearCompleted: "2025",
   description:
@@ -167,7 +188,7 @@ const works = [
           "images/eduvaultai_dash_pic.png",
          "images/tenImg.png"
         ],
-        alignLeft: true
+        alignLeft: false
     },
     {
    projectName: "React.js & Firebase E-Commerce Platform",
@@ -192,7 +213,7 @@ const works = [
           "images/webdevportfolio_pic.png",
           "images/admin-ecom.png"
         ],
-        alignLeft: false
+        alignLeft: true
     },
    
 ]

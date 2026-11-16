@@ -71,9 +71,12 @@ export async function streamChat(question, { mode = 'recruiter', history = [], s
   // or token-reset this timer; a stalled request must still end.
   setDeadline(timeoutMs ?? (mode === 'recruiter' ? 17000 : 135000))
   try {
+    // Send only the browser's timezone preference; the server supplies the clock.
+    let timeZone
+    try { timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone } catch { /* The backend can explicitly use UTC. */ }
     const response = await fetchImpl(CHAT_ENDPOINT, {
       method: 'POST', credentials: 'omit', headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' }, signal: controller.signal,
-      body: JSON.stringify({ mode, message: question, history: boundedHistory(history, mode) }),
+      body: JSON.stringify({ mode, message: question, history: boundedHistory(history, mode), ...(timeZone ? { timeZone } : {}) }),
     })
     if (!response.ok) {
       let code

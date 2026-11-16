@@ -7,7 +7,7 @@ import { PERSONAL_FALLBACK } from '../src/services/assistant/recruiterResponder.
 import { responseStyle } from '../src/services/assistant/responseStyle.js'
 import { PublicError, safeError, recruiterProviderDiagnostic } from './errors.js'
 import { rateHeaders, tokenUsage, recruiterCooldown, createRecruiterTokenBudget } from './groqMetrics.js'
-import { providerRequest } from './providerRequest.js'
+import { needsFreshClock, providerRequest } from './providerRequest.js'
 
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 const normalize = value => value.trim().toLowerCase().replace(/\s+/g, ' ')
@@ -133,9 +133,11 @@ export function createRecruiterService({ config, groq, fallback, knowledgeLoader
     let failureStage = 'prepare'
     try {
       signal.throwIfAborted()
+      const options = providerRequest({ model: config.model, messages, input, maxTokens: budget })
+      messages = options.messages
       // Preparation belongs inside the release boundary too: errors here must
       // not permanently consume an active-request slot.
-      Object.assign(metric, { historyMessages: messages.length - 2, promptCharacters: JSON.stringify(messages).length })
+      Object.assign(metric, { historyMessages: messages.length - 3, promptCharacters: JSON.stringify(messages).length })
       // Count model input, not JSON field names/escaping used by the transport.
       // Keep the conservative bytes/3 allowance and full output reservation.
       const encoder = new TextEncoder()
@@ -169,11 +171,9 @@ export function createRecruiterService({ config, groq, fallback, knowledgeLoader
       Object.assign(metric, { origin: 'groq', account: selectedProvider, routingReason: route.reason, estimatedRequestTokens: estimate })
       const client = account.client
       requestLog('provider_attempt', { provider: 'groq', account: selectedProvider, stage: 'answer', factIds: facts.map(fact => fact.id) })
-      const model = config.model
       failureStage = 'request'
       stats.providerCalls++
       // Use the same plain-text request contract as General Mode.
-      const options = providerRequest({ model, messages, maxTokens: budget })
       const request = client.chat.completions.create(options, { signal })
       let stream
       if (typeof request.withResponse === 'function') {
@@ -316,8 +316,9 @@ export function createRecruiterService({ config, groq, fallback, knowledgeLoader
     requestLog('retrieval', { factIds: relevant.map(fact => fact.id) })
     const messages = mixed ? generalMessages : buildRecruiterRagMessages(input, relevant)
     const cacheVersion = snapshot(facts.filter(fact => fact.id !== 'resume'))
-    const key = hash(['plain-recruiter-v1', config.model, cacheVersion, input.generalQuestion, input.message, messages, personalFactual])
-    const saved = cached(key)
+    const cacheable = !needsFreshClock(input)
+    const key = hash(['plain-recruiter-v1', config.model, cacheVersion, input.timeZone, input.generalQuestion, input.message, messages, personalFactual, cacheable ? null : now()])
+    const saved = cacheable ? cached(key) : null
     if (saved && saved.knowledgeIds.every(id => facts.some(fact => fact.id === id))) {
       stats.cacheHits++
       emit({ origin: 'cache', providerCalls: 0 })
@@ -351,7 +352,7 @@ export function createRecruiterService({ config, groq, fallback, knowledgeLoader
         const latest = await current()
         controller.signal.throwIfAborted()
         if (snapshot(latest) !== version) throw new PublicError(503, 'KNOWLEDGE_UNAVAILABLE', 'Background information changed. Please retry.')
-        remember(key, answer)
+        if (cacheable) remember(key, answer)
         return answer
       }).finally(() => {
         clearTimeout(deadlineTimer)
