@@ -17,11 +17,15 @@ const transitions = {
 const splashScreen = true // recommended: for best behavior after refresh
 
 // --- 👋 Greeting Section ---
+const education = {
+    field: "Computer Science Engineering"
+}
+
 const greeting = {
     intro: "Hello 👋, my name is",
     name: "Shubham Yadav",
 message:
-  "Full Stack Developer with a background in Computer Science Engineering and 6 months of hands-on industry experience. Experienced in frontend and backend development, building and maintaining real-world web applications with a focus on performance, security, and user experience. Passionate about solving practical problems, writing clean and maintainable code, and collaborating with teams to deliver reliable solutions.",
+  `Full Stack Developer with a background in ${education.field} and 6 months of hands-on industry experience. Experienced in frontend and backend development, building and maintaining real-world web applications with a focus on performance, security, and user experience. Passionate about solving practical problems, writing clean and maintainable code, and collaborating with teams to deliver reliable solutions.`,
   basedLocation: "India",
     resumeLink: "https://drive.google.com/file/d/1CrqhVnvWa8Jp8soEbye5KS_yYXBpqMpF/view?usp=sharing", // recommended: google drive file share link (change to "anyone on the internet can view")
     logo: {
@@ -244,6 +248,7 @@ export default {
     greeting,
     socialMediaLinks,
     about,
+    education,
     experiences,
     works,
     archiveLink,

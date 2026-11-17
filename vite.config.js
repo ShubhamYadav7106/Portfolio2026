@@ -2,11 +2,12 @@ import { fileURLToPath, URL } from 'node:url'
 
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
+import publicHtmlFallback from './scripts/public-html.mjs'
 
 // https://vitejs.dev/config/
 export default defineConfig({
 	base: '/', // base set to root to support custom domain.
-	plugins: [vue()],
+	plugins: [vue(), publicHtmlFallback()],
 	server: {
 		host: '127.0.0.1',
 		port: 5173,
