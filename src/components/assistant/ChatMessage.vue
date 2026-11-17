@@ -75,7 +75,7 @@ async function copyCode(block, index) {
       </div>
       <p class="review-note">{{ message.verification === 'verified' ? 'Approved public facts · Within review period' : 'Verification unavailable' }}</p>
     </template>
-    <p v-if="message.role === 'assistant' && message.mode === 'recruiter' && message.status === 'complete' && message.generalQuestion" class="review-note">For more technical or general questions, switch to General AI Mode.</p>
+    <p v-if="message.role === 'assistant' && message.mode === 'recruiter' && message.status === 'complete' && message.generalQuestion === true" class="review-note">If your question is general or unrelated to Shubham, please switch to General AI Mode.</p>
   </article>
 </template>
 

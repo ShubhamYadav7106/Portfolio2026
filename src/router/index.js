@@ -1,5 +1,11 @@
-import { createRouter, createWebHistory } from 'vue-router'
+import { createRouter, createWebHistory, START_LOCATION } from 'vue-router'
 import MainView from '../views/MainView.vue'
+
+// Ignore restored positions and incoming anchors only during page startup.
+window.history.scrollRestoration = 'manual'
+if (window.location.hash) {
+    window.history.replaceState(window.history.state, '', window.location.pathname + window.location.search)
+}
 
 const router = createRouter({
     history: createWebHistory(import.meta.env.BASE_URL),
@@ -11,6 +17,9 @@ const router = createRouter({
         }
     ],
     scrollBehavior(to, from, savedPosition) {
+        if (from === START_LOCATION) {
+            return { left: 0, top: 0, behavior: 'instant' }
+        }
         if (to.hash && to.hash == '#landing-page') {
             return {
                 top: 0,

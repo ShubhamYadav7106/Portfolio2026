@@ -20,6 +20,7 @@ const panel = ref(null)
 const composer = ref(null)
 const transcript = ref(null)
 const viewport = ref({})
+const isKeyboardOpen = ref(false)
 const unread = ref(false)
 const hasConversation = computed(() => messages.value.length > 0)
 const canSend = computed(() => draft.value.trim().length > 0 && draft.value.length <= MAX_MESSAGE_LENGTH && !isLoading.value)
@@ -99,7 +100,6 @@ function chooseSuggestion(item) {
   void nextTick(() => (isMobile.value ? panel.value : composer.value)?.focus())
 }
 let mobileQuery
-let releaseMobileLock
 let panelMotion
 let interruptedPanelFrame
 const panelFrame = (rect, radius) => ({ left: `${rect.left}px`, top: `${rect.top}px`, right: 'auto', bottom: 'auto', width: `${rect.width}px`, height: `${rect.height}px`, maxWidth: 'none', borderRadius: radius })
@@ -158,10 +158,13 @@ const leavePanel = (element, done) => morphPanel(element, done, false)
 
 function updateViewport() {
   const visible = window.visualViewport
+  const menu = document.querySelector('#navbar > div > button')?.getBoundingClientRect()
+  isKeyboardOpen.value = Boolean(visible && visible.height < window.innerHeight * .75)
   viewport.value = {
     '--ask-viewport-height': `${visible?.height ?? window.innerHeight}px`,
     '--ask-viewport-top': `${visible?.offsetTop ?? 0}px`,
-    '--ask-mobile-bottom-inset': visible && visible.height < window.innerHeight * .75 ? '0px' : 'env(safe-area-inset-bottom, 0px)',
+    '--ask-menu-top': `${Math.max(8, (menu?.bottom ?? 72) + 8 - (visible?.offsetTop ?? 0))}px`,
+    '--ask-mobile-bottom-inset': isKeyboardOpen.value ? '0px' : 'env(safe-area-inset-bottom, 0px)',
   }
 }
 
@@ -170,22 +173,8 @@ function updateMobile() {
   updateViewport()
 }
 
-function syncMobileLock() {
-  releaseMobileLock?.()
-  releaseMobileLock = undefined
-  if (!isOpen.value || !isMobile.value) return
-  const app = document.getElementById('app')
-  const originalInert = app?.inert
-  const originalOverflow = document.body.style.overflow
-  if (app) app.inert = true
-  document.body.style.overflow = 'hidden'
-  releaseMobileLock = () => {
-    if (app) app.inert = originalInert
-    document.body.style.overflow = originalOverflow
-  }
-}
-
 async function open() {
+  updateViewport()
   isOpen.value = true
   unread.value = false
   await nextTick()
@@ -247,7 +236,6 @@ watch(() => [messages.value.length, messages.value.at(-1)?.text.length, isLoadin
   else if (current[0] !== previous?.[0] || current[1] !== previous?.[1]) unread.value = true
 })
 
-watch([isOpen, isMobile], syncMobileLock)
 watch(activeMode, async () => {
   unread.value = false
   await nextTick()
@@ -261,19 +249,6 @@ function onDocumentKeydown(event) {
     event.preventDefault()
     void close()
     return
-  }
-  if (event.key !== 'Tab' || !isMobile.value) return
-  const controls = [...panel.value.querySelectorAll('button:not([disabled]), input[type="radio"]:checked, a[href], textarea:not([disabled]), [tabindex="0"]')]
-    .filter(element => element.getClientRects().length > 0)
-  const first = controls[0]
-  const last = controls.at(-1)
-  const active = document.activeElement
-  if (event.shiftKey && (active === first || active === panel.value)) {
-    event.preventDefault()
-    last?.focus()
-  } else if (!event.shiftKey && (active === last || active === panel.value)) {
-    event.preventDefault()
-    first?.focus()
   }
 }
 
@@ -289,7 +264,6 @@ function clearChat() {
 }
 
 function followSource() {
-  // Release mobile scroll and focus locks before navigating a portfolio anchor.
   void close()
 }
 
@@ -305,7 +279,6 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   cancelPanelMotion()
-  releaseMobileLock?.()
   mobileQuery?.removeEventListener('change', updateMobile)
   document.removeEventListener('keydown', onDocumentKeydown)
   window.visualViewport?.removeEventListener('resize', updateViewport)
@@ -317,20 +290,16 @@ onBeforeUnmount(() => {
 <template>
   <Teleport to="body">
     <div class="ask-shubham" :style="viewport">
-      <Transition name="ask-backdrop">
-        <div v-if="isOpen && isMobile" class="chat-backdrop" aria-hidden="true" @click="close" />
-      </Transition>
-
       <Transition :css="false" @enter="enterPanel" @leave="leavePanel" @enter-cancelled="cancelPanelMotion" @leave-cancelled="cancelPanelMotion">
         <section
           v-if="isOpen"
           id="ask-shubham-panel"
           ref="panel"
           class="chat-panel"
+          :class="{ 'chat-panel--keyboard': isMobile && isKeyboardOpen }"
           role="dialog"
           :aria-hidden="!isOpen ? 'true' : undefined"
           :inert="!isOpen || undefined"
-          :aria-modal="isMobile ? 'true' : undefined"
           aria-labelledby="ask-shubham-title"
           :aria-describedby="isMockDevelopment ? 'ask-preview-description' : undefined"
           tabindex="-1"
@@ -401,7 +370,7 @@ onBeforeUnmount(() => {
                 name="question"
                 rows="1"
                 :maxlength="MAX_MESSAGE_LENGTH"
-                :aria-describedby="draft.length > 500 ? 'ask-character-count ask-input-hint' : 'ask-input-hint'"
+                :aria-describedby="`${draft.length > 500 ? 'ask-character-count ' : ''}${isMobile ? 'ask-session-note' : 'ask-input-hint'}`"
                 :placeholder="mode.placeholder"
                 @input="resizeComposer"
                 @keydown="onComposerKeydown"
@@ -410,9 +379,9 @@ onBeforeUnmount(() => {
               <button v-else type="submit" class="send-button" :disabled="!canSend" aria-label="Send message" title="Send message"><ArrowUpIcon /></button>
             </form>
             <div class="composer-meta">
-              <p id="ask-input-hint">{{ isMobile ? 'A question is a good place to start.' : 'Enter to send · Shift + Enter for a new line' }}</p>
+              <p v-if="!isMobile" id="ask-input-hint">Enter to send · Shift + Enter for a new line</p>
               <span v-if="draft.length > 500" id="ask-character-count">{{ draft.length }}/{{ MAX_MESSAGE_LENGTH }}</span>
-              <span v-else class="session-note">Session only</span>
+              <span v-if="isMobile || draft.length <= 500" id="ask-session-note" class="session-note">Session only</span>
             </div>
           </footer>
           <p class="sr-only" role="status">{{ !canRetry ? notice : '' }}</p>
@@ -447,7 +416,7 @@ onBeforeUnmount(() => {
   --ask-border: #dedfd9;
   --ask-soft: #efefea;
   --ask-panel-right: 24px;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-family: 'Source Code Pro', monospace;
   font-size: 14px;
   line-height: 1.5;
   color: var(--ask-text);
@@ -540,7 +509,7 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid var(--ask-acce
 .header-identity { flex: 1; }
 .header-identity > div { min-width: 0; overflow-wrap: anywhere; }
 .header-actions { flex-shrink: 0; }
-.chat-header { display: flex; flex-wrap: wrap; flex-shrink: 0; align-items: center; justify-content: space-between; padding: 20px 20px 16px; gap: 0 8px; }
+.chat-header { display: flex; flex-wrap: wrap; flex-shrink: 0; align-items: center; justify-content: space-between; padding: 16px 20px 12px; gap: 0 8px; }
 .header-identity { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .header-avatar { display: grid; place-items: center; width: 40px; height: 40px; flex-shrink: 0; border: 1px solid var(--ask-border); border-radius: 8px; color: var(--ask-link); }
 .header-avatar .assistant-mark { width: 32px; height: 32px; }
@@ -553,14 +522,14 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid var(--ask-acce
 .icon-button:disabled { opacity: .4; }
 .preview-bar { display: flex; align-items: center; gap: 12px; flex-shrink: 0; padding: 12px 20px; border-block: 1px solid var(--ask-border); font-size: 11px; color: var(--ask-muted); }
 .preview-badge { color: var(--ask-link); font-weight: 600; }
-.chat-transcript { flex: 1; min-height: 0; min-width: 0; padding: 20px 24px; overflow-y: auto; overflow-x: hidden; scrollbar-gutter: stable; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--ask-border) transparent; }
+.chat-transcript { flex: 1; min-height: 0; min-width: 0; padding: 16px 20px; overflow-y: auto; overflow-x: hidden; scrollbar-gutter: stable; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--ask-border) transparent; }
 .chat-transcript :deep(.chat-message--assistant) { animation: ask-answer-in .16s ease; }
 .chat-welcome { padding-top: 0; }
 .welcome-eyebrow { margin: 0 0 12px; color: var(--ask-muted); font-size: 12px; }
-.chat-welcome h3 { margin: 0; font-family: Georgia, 'Times New Roman', serif; font-size: 28px; font-weight: 400; line-height: 1.1; letter-spacing: -.025em; }
+.chat-welcome h3 { margin: 0; font-family: inherit; font-size: 28px; font-weight: 400; line-height: 1.1; letter-spacing: -.025em; overflow-wrap: anywhere; }
 .welcome-description { margin: 12px 0 16px; font-size: 13px; line-height: 1.6; color: var(--ask-muted); }
 .suggested-questions { display: grid; border-top: 1px solid var(--ask-border); }
-.scrollable-suggestions { grid-auto-rows: minmax(4.5rem, auto); max-height: 18rem; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--ask-border) transparent; }
+.scrollable-suggestions { grid-auto-rows: minmax(60px, auto); max-height: 18rem; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--ask-border) transparent; }
 .suggestion { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 60px; padding: 12px 4px; text-align: left; color: var(--ask-text); border: 0; border-bottom: 1px solid var(--ask-border); border-radius: 0; background: transparent; transition: background .16s ease; }
 .suggestion:hover { background: var(--ask-soft); }
 .suggestion:focus-visible { outline-offset: -2px; }
@@ -595,12 +564,9 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid var(--ask-acce
 .send-button svg { width: 20px; height: 20px; }
 .send-button:hover:not(:disabled) { opacity: .85; }
 .send-button:disabled { background: var(--ask-border); color: var(--ask-muted); }
-.composer-meta { display: flex; justify-content: space-between; gap: 8px; margin-top: 8px; font-size: 11px; line-height: 1.5; color: var(--ask-muted); }
+.composer-meta { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 8px; margin-top: 8px; font-size: 11px; line-height: 1.5; color: var(--ask-muted); }
 .composer-meta p { margin: 0; }
 .session-note { white-space: nowrap; }
-.chat-backdrop { position: fixed; z-index: 35; inset: 0; background: #0b100e80; }
-.ask-backdrop-enter-active, .ask-backdrop-leave-active { transition: opacity .24s ease; }
-.ask-backdrop-enter-from, .ask-backdrop-leave-to { opacity: 0; }
 @keyframes ask-thinking { 0%, 60%, 100% { opacity: .35; } 30% { opacity: 1; } }
 @keyframes ask-answer-in { from { opacity: .7; } to { opacity: 1; } }
 /* Keep clear of the portfolio's vertical location label. */
@@ -629,36 +595,55 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid var(--ask-acce
   .chat-launcher .launcher-copy { gap: 0; }
   .chat-launcher .launcher-copy > span { font-size: 13px; font-weight: 500; line-height: 20px; white-space: nowrap; }
   :global(html.dark .ask-shubham .chat-launcher) { box-shadow: none; }
-  .chat-panel { --mobile-top-gap: max(8px, env(safe-area-inset-top)); --mobile-bottom-gap: max(8px, var(--ask-mobile-bottom-inset, env(safe-area-inset-bottom))); top: calc(var(--ask-viewport-top, 0px) + var(--mobile-top-gap)); right: max(8px, env(safe-area-inset-right)); left: max(8px, env(safe-area-inset-left)); bottom: auto; width: auto; max-width: none; height: max(0px, calc(var(--ask-viewport-height, 100dvh) - var(--mobile-top-gap) - var(--mobile-bottom-gap))); border-radius: 16px; transform-origin: bottom center; }
-  .chat-header { padding: 12px 14px 8px; }
+  .chat-panel {
+    --mobile-top-gap: max(var(--ask-menu-top, 80px), env(safe-area-inset-top));
+    --mobile-bottom-gap: max(8px, var(--ask-mobile-bottom-inset, env(safe-area-inset-bottom)));
+    --mobile-panel-right: 12px;
+    top: calc(var(--ask-viewport-top, 0px) + var(--mobile-top-gap));
+    right: var(--mobile-panel-right); left: auto; bottom: auto;
+    width: 88vw;
+    max-width: calc(100vw - var(--mobile-panel-right) - max(8px, env(safe-area-inset-left)));
+    height: min(63dvh, max(0px, calc(var(--ask-viewport-height, 100dvh) - var(--mobile-top-gap) - var(--mobile-bottom-gap))));
+    border-radius: 16px; transform-origin: top right;
+  }
+  .chat-panel--keyboard { --mobile-top-gap: max(8px, env(safe-area-inset-top)); }
+  .chat-header { padding: 10px 12px 6px; }
+  .header-identity { gap: 8px; }
+  .header-avatar { width: 32px; height: 32px; }
+  .header-identity h2 { font-size: 14px; }
+  .header-identity p { font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .header-actions { gap: 0; }
+  .chat-header :deep(.mode-option > span) { gap: 4px; white-space: normal; text-align: center; line-height: 1.3; }
   .followup-questions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .icon-button { width: 40px; height: 40px; }
-  .preview-bar { padding: 12px 16px; }
-  .chat-transcript { padding: 12px 16px; }
-  .chat-welcome { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+  .preview-bar { padding: 8px 12px; }
+  .chat-transcript { padding: 10px 12px; }
   .welcome-eyebrow { margin-bottom: 6px; }
-  .chat-welcome h3 { font-size: 26px; line-height: 1.12; }
-  .welcome-description { margin: 8px 0 12px; line-height: 1.45; }
-  .chat-welcome > :not(.scrollable-suggestions) { flex-shrink: 0; }
-  .scrollable-suggestions { flex: 1 1 auto; min-height: 60px; max-height: none; grid-auto-rows: minmax(60px, auto); align-content: start; }
-  .suggestion { min-height: 60px; padding-block: 8px; gap: 8px; }
+  .chat-welcome h3 { font-size: 22px; line-height: 1.2; }
+  .welcome-description { margin: 6px 0 10px; line-height: 1.45; }
+  .scrollable-suggestions { max-height: none; overflow: visible; grid-auto-rows: minmax(52px, auto); }
+  .suggestion { min-height: 52px; padding-block: 6px; gap: 8px; }
   .suggestion-copy { gap: 2px; }
   .welcome-review { margin: 8px 0 0; line-height: 1.4; }
   .chat-footer { margin-top: auto; padding: 8px 12px; }
   .followup-questions { margin-bottom: 8px; }
   .composer { padding: 6px; }
-  .composer-meta { margin-top: 6px; }
+  .composer-meta { margin-top: 4px; font-size: 10px; }
   .composer textarea { font-size: 16px; }
+  .chat-panel--keyboard .chat-header { padding-block: 8px; max-height: 40%; overflow-y: auto; }
+  .chat-panel--keyboard .header-identity p { display: none; }
+  .chat-panel--keyboard .chat-footer { max-height: 50%; overflow-y: auto; }
+  .chat-panel--keyboard .composer textarea { max-height: 64px; }
+  .chat-panel--keyboard .followup-questions { grid-template-columns: none; grid-auto-flow: column; grid-auto-columns: max-content; overflow-x: auto; overscroll-behavior-x: contain; }
+  .chat-panel--keyboard .followup-questions button { min-height: 36px; padding: 4px 8px; }
 }
 @media (max-width: 359px) {
   .header-identity { gap: 8px; }
   .header-avatar { width: 32px; height: 32px; }
   .header-identity h2 { font-size: 14px; }
-  .header-identity p { font-size: 11px; max-width: 136px; }
   .chat-header { padding-inline: 12px; }
   .header-actions { gap: 0; }
   .icon-button { width: 36px; height: 40px; }
-  .chat-welcome h3 { font-size: 26px; }
   .preview-bar { padding-inline: 12px; }
   .composer-meta { font-size: 10px; }
 }

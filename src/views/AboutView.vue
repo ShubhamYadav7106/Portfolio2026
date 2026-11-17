@@ -9,12 +9,12 @@
                 <div class="space-y-4">
                     <p v-for="paragraph in content.autobiography" class="m-0">{{ paragraph }}</p>
                 </div>
-                <div class="mt-1 mb-6 px-4">
+                <div class="mt-1 mb-6 px-0 sm:px-4">
     <p class="pb-4 font-semibold">Tech Stack...</p>
 
-    <ul class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        <li v-for="tech in content.techStack" class="min-w-0 break-words px-4 py-2 rounded-lg bg-gray-100 dark:bg-gray-800 hover:scale-105 transition-all duration-300">
-            ✅{{ tech }}
+    <ul class="grid grid-cols-2 gap-3">
+        <li v-for="tech in content.techStack" class="min-w-0 break-words whitespace-nowrap sm:whitespace-normal px-2 sm:px-4 py-2 rounded-lg bg-gray-100 dark:bg-gray-800 hover:scale-105 transition-all duration-300">
+            <span class="hidden sm:inline">✅</span>{{ tech }}
         </li>
     </ul>
 </div>

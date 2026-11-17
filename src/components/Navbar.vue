@@ -3,7 +3,7 @@
         <!-- Navbar Body -->
         <div class="flex flex-wrap items-center justify-between px-9 md:py-4 bg-white/[.9] dark:bg-slate-900 backdrop-blur-sm transition-shadow duration-300" :class="{ 'shadow-lg dark:bg-slate-900/[.8]': !hideNavShadow }">
             <!-- Logo -->
-            <router-link to="/#landing-page" class="signature-link" aria-label="Shubham Yadav — home" @pointerenter="redrawSignature" @pointerdown="redrawSignature" @focus="redrawSignature">
+            <router-link to="/#landing-page" class="signature-link" aria-label="Shubham Yadav — home" @pointerdown="redrawSignature" @focus="redrawSignature">
                 <div :class="['transition-all motion-reduce:transition-none duration-500', showTransition ? 'opacity-1 blur-0' : 'opacity-0 blur-sm']">
                     <div v-if="!portfolio.greeting.logo.custom">
                         <img :src="getImageUrl(portfolio.greeting.logo.link)" class="scale-75 md:scale-100 origin-left drop-shadow-lg" id="logo-img"/>
@@ -103,7 +103,7 @@
 
 <script setup>
 import { Bars2Icon, XMarkIcon, MoonIcon, SunIcon } from '@heroicons/vue/24/solid'
-import { ref, onMounted, onBeforeUnmount, useId } from 'vue';
+import { ref, nextTick, watch, onMounted, onBeforeUnmount, useId } from 'vue';
 import NavTransition from './transitions/NavTransition.vue';
 import portfolio from '../portfolio'
 
@@ -115,6 +115,7 @@ const hideNavShadow = ref(true)
 
 const props = defineProps({
     showTransition: Boolean,
+    mainVisible: Boolean,
     darkModeActive: Boolean
 })
 defineEmits(['toggle-dark'])
@@ -124,6 +125,7 @@ const signatureMask = ref(null)
 const signatureMaskId = `signature-ink-${useId()}`
 let signatureAnimations = []
 let signatureRun = 0
+let initialSignaturePlayed = false
 const svgNamespace = 'http://www.w3.org/2000/svg'
 // Pen trajectories reveal the existing glyphs; they never replace their outlines.
 const signaturePen = {
@@ -143,9 +145,8 @@ function resetSignature() {
     signatureSurface.value?.style.removeProperty('-webkit-mask-image')
 }
 
-function redrawSignature(event) {
-    if (event.type === 'pointerenter' && event.pointerType === 'touch'
-        || event.type === 'pointerdown' && event.pointerType === 'mouse'
+function redrawSignature(event = {}) {
+    if (event.type === 'pointerdown' && event.pointerType === 'mouse'
         || event.type === 'focus' && !event.currentTarget.matches(':focus-visible')) return
     const surface = signatureSurface.value
     const mask = signatureMask.value
@@ -197,6 +198,14 @@ function redrawSignature(event) {
         if (signatureRun === run) resetSignature()
     })
 }
+
+watch(() => props.mainVisible && props.showTransition, async visible => {
+    if (!visible || initialSignaturePlayed) return
+    initialSignaturePlayed = true
+    await nextTick()
+    await document.fonts.ready
+    redrawSignature()
+}, { immediate: true, flush: 'post' })
 
 onMounted(() => {
     window.addEventListener('scroll', onScroll)

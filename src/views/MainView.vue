@@ -2,7 +2,7 @@
 	<Transition name="neural-reveal"><SplashView v-if="showingSplash"/></Transition>
 
 	<div v-show="!showingSplash" class="min-h-screen overscroll-contain bg-white dark:bg-slate-900 dark:text-slate-300 text-base md:text-xl" :style="{ '--portfolio-accent': portfolio.colors.buttonColor }">
-		<Navbar :show-transition="showLanding" :dark-mode-active="darkModeActive" @toggle-dark="toggleDark"/>
+		<Navbar :show-transition="showLanding" :main-visible="!showingSplash" :dark-mode-active="darkModeActive" @toggle-dark="toggleDark"/>
 
 		<div class="min-h-full mx-10">
 			<div class="flex flex-col md:grid md:grid-cols-6 min-h-full">
@@ -67,7 +67,6 @@
 
 <script setup>
 import { defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
 
 import Navbar from '../components/Navbar.vue'
 import LandingView from './LandingView.vue'
@@ -80,8 +79,6 @@ import SplashView from './SplashView.vue'
 import portfolio from '../portfolio'
 
 const AskShubhamWidget = defineAsyncComponent(() => import('../components/assistant/AskShubhamWidget.vue'))
-
-const router = useRouter()
 
 const showingSplash = ref(portfolio.splashScreen)
 const showLanding = ref(!(portfolio.transitions.active || portfolio.transitions.onlyLanding))
@@ -112,7 +109,7 @@ const splashScreen = () => {
 	if (portfolio.splashScreen) {
 		setTimeout(() => {
 			showingSplash.value = false
-			router.push(window.location.hash)
+			void nextTick(() => window.scrollTo({ left: 0, top: 0, behavior: 'instant' }))
 		}, 1600)
 	}
 }
